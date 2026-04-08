@@ -70,6 +70,11 @@ class SearchConfig(BaseModel):
     provider: str = "tavily"  # tavily | brave | serper | file_seeds | exa_mcp
     api_key_env: str = "TAVILY_API_KEY"
     max_results: int = 10
+    # v1.3 #3: opt-in adaptive quality-based routing across all configured
+    # providers. When True, the CLI is expected to wrap the provider list
+    # in an AdaptiveSearchRouter — capability flag only; actual CLI wiring
+    # is deferred to a follow-up.
+    adaptive: bool = False
 
 
 class RunSpec(BaseModel):
