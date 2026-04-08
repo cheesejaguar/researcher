@@ -31,13 +31,19 @@ def run(
         "--backend",
         help="Backend policy: auto (use CLI if detected), cli (force CLI), api (force OpenRouter).",
     ),
+    obsidian_vault: str = typer.Option(
+        "",
+        "--obsidian-vault",
+        help="Path to an Obsidian vault root. Overrides the spec file. Empty string disables.",
+    ),
 ) -> None:
     """Run a research job from a YAML spec. Auto-launches the TUI by default."""
     if backend not in ("auto", "cli", "api"):
         raise typer.BadParameter(f"--backend must be one of auto|cli|api, got {backend!r}")
     typer.echo(
         f"[researcher run] spec={spec} run_id={run_id or 'auto'} "
-        f"tui={'off' if no_tui else 'on'} offline={offline} backend={backend}"
+        f"tui={'off' if no_tui else 'on'} offline={offline} backend={backend} "
+        f"obsidian_vault={obsidian_vault or 'none'}"
     )
     typer.echo("Wave 0 skeleton: orchestrator dispatch lands in Wave 1-E.")
 

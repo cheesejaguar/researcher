@@ -82,6 +82,9 @@ class RunSpec(BaseModel):
     backend_policy: Literal["auto", "cli", "api"] = "auto"
     max_subagent_calls: int = 500
     subagent_timeout_s: int = 120
+    # Obsidian integration — when set, a secondary ObsidianWriter sink
+    # materializes FactClaims into Markdown files in this vault.
+    obsidian_vault: Optional[str] = None
 
 
 # ---------- YAML loader ----------

@@ -247,3 +247,41 @@ def test_runspec_backend_policy_rejects_unknown():
             models={"fast": "m"},
             backend_policy="banana",  # type: ignore[arg-type]
         )
+
+
+# ---------- Obsidian vault ----------
+
+
+def test_runspec_obsidian_vault_default_is_none():
+    s = RunSpec(
+        spec_id="x",
+        goal="g",
+        entities=[
+            EntitySpec(
+                name="War",
+                fields=[FieldSpec(name="name", type="str", required=True)],
+                search_templates=[],
+            )
+        ],
+        seeds=["s"],
+        models={"fast": "m"},
+    )
+    assert s.obsidian_vault is None
+
+
+def test_runspec_obsidian_vault_accepts_path():
+    s = RunSpec(
+        spec_id="x",
+        goal="g",
+        entities=[
+            EntitySpec(
+                name="War",
+                fields=[FieldSpec(name="name", type="str", required=True)],
+                search_templates=[],
+            )
+        ],
+        seeds=["s"],
+        models={"fast": "m"},
+        obsidian_vault="~/Documents/Vault",
+    )
+    assert s.obsidian_vault == "~/Documents/Vault"
