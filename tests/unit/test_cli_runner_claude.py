@@ -253,3 +253,71 @@ async def test_spawn_failed_returns_ok_false():
     assert result.error is not None
     assert result.error.startswith("spawn_failed")
     assert result.exit_code is None
+
+
+@pytest.mark.asyncio
+async def test_failure_results_are_not_cached(tmp_path):
+    """Cache only successful results — transient failures must not poison the cache."""
+    call_count = {"n": 0}
+    responses = [
+        # First call: malformed → parse_failed (after retry)
+        b"not json",
+        b"still not json",  # the inner retry from execute() also fails
+        # Second call (different execute() invocation): valid envelope
+        json.dumps({
+            "type": "result",
+            "subtype": "final_result",
+            "result": json.dumps({"entity_name": "OK", "extractions": [], "diagnostics": ""}),
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+            "total_cost_usd": 0.0,
+            "is_error": False,
+        }).encode(),
+    ]
+
+    async def fake_exec(*argv, **kwargs):
+        idx = min(call_count["n"], len(responses) - 1)
+        call_count["n"] += 1
+        return _fake_process(stdout=responses[idx])
+
+    runner = ClaudeCodeRunner(model="sonnet", post_mortem_dir=tmp_path)
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+        # First execute() — should fail (parse_failed) and NOT cache.
+        result1 = await runner.execute(prompt="p", schema=SCHEMA, timeout_s=30)
+        assert not result1.ok
+        assert result1.error is not None and result1.error.startswith("parse_failed")
+        # Second execute() with the same prompt — should NOT hit a cached failure;
+        # it should call the subprocess again and succeed this time.
+        result2 = await runner.execute(prompt="p", schema=SCHEMA, timeout_s=30)
+        assert result2.ok, f"second call should not be served from cache, got {result2.error}"
+        assert result2.data is not None
+        assert result2.data.entity_name == "OK"
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_stdin_write_kills_child():
+    """If CancelledError fires before reaching wait_for, the proc must still be killed."""
+    proc = _fake_process()
+    cancellation_event = asyncio.Event()
+
+    async def slow_drain():
+        # Block long enough for the test to cancel us.
+        cancellation_event.set()
+        await asyncio.sleep(10.0)
+
+    proc.stdin.drain = slow_drain
+
+    async def fake_exec(*argv, **kwargs):
+        return proc
+
+    runner = ClaudeCodeRunner(model="sonnet")
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+        task = asyncio.create_task(
+            runner.execute(prompt="p", schema=SCHEMA, timeout_s=60)
+        )
+        # Wait until the runner is blocked inside drain().
+        await cancellation_event.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    proc.kill.assert_called()

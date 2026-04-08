@@ -92,7 +92,9 @@ class ClaudeCodeRunner:
             )
             result = await self._run_once(argv, stricter_prompt, timeout_s, stricter=True)
 
-        self._cache[key] = result
+        # Only cache successful results — failures are transient and should be retried.
+        if result.ok:
+            self._cache[key] = result
         return result
 
     def _build_argv(self, *, schema: dict, tools: tuple[str, ...]) -> list[str]:
@@ -179,6 +181,12 @@ class ClaudeCodeRunner:
                     pass
                 raise
         except asyncio.CancelledError:
+            if proc is not None:
+                proc.kill()
+                try:
+                    await proc.wait()
+                except Exception:
+                    pass
             raise
 
         wall_ms = int((time.monotonic() - start) * 1000)
