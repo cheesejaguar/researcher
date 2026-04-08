@@ -1,0 +1,16 @@
+# MCP server version pins.
+#
+# Each entry freezes the set of tools researcher is willing to call on a
+# given MCP server at a given version. Anything the server advertises that
+# isn't in `allowed_tools` is discarded — including its description — so
+# tool-description poisoning attempts cannot reach an LLM context.
+#
+# Bumping a server version requires a deliberate code review of the new
+# tool surface; do not auto-update.
+servers:
+  exa:
+    name: exa-mcp-server
+    version: "0.1.0"
+    allowed_tools:
+      - exa_search
+      - exa_find_similar

@@ -67,7 +67,7 @@ class RelationSpec(BaseModel):
 
 
 class SearchConfig(BaseModel):
-    provider: str = "tavily"  # tavily | brave | serper | file_seeds
+    provider: str = "tavily"  # tavily | brave | serper | file_seeds | exa_mcp
     api_key_env: str = "TAVILY_API_KEY"
     max_results: int = 10
 
