@@ -1,0 +1,34 @@
+{
+  "entity_name": "World War II",
+  "extractions": [
+    {
+      "field": "name",
+      "value": "World War II",
+      "source_url": "https://en.wikipedia.org/wiki/World_War_II",
+      "snippet": "World War II or the Second World War was a global conflict...",
+      "confidence": 0.98
+    },
+    {
+      "field": "start_year",
+      "value": 1939,
+      "source_url": "https://en.wikipedia.org/wiki/World_War_II",
+      "snippet": "...lasted from 1939 to 1945...",
+      "confidence": 0.97
+    },
+    {
+      "field": "end_year",
+      "value": 1945,
+      "source_url": "https://en.wikipedia.org/wiki/World_War_II",
+      "snippet": "...lasted from 1939 to 1945...",
+      "confidence": 0.97
+    },
+    {
+      "field": "belligerents",
+      "value": ["Allies", "Axis"],
+      "source_url": "https://en.wikipedia.org/wiki/World_War_II",
+      "snippet": "two opposing military alliances: the Allies and the Axis",
+      "confidence": 0.96
+    }
+  ],
+  "diagnostics": "found via Wikipedia infobox"
+}
