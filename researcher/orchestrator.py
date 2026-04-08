@@ -95,6 +95,8 @@ class Orchestrator:
         self._native_deps: Optional[NativeAgentDeps] = None
         self._resume_from = resume_from
         self._interrupt_handler: Optional[InterruptHandler] = None
+        # v1.2: optional difficulty-aware compute gate (opt-in).
+        self._difficulty_gate: Any = None
 
     def set_backend_resolver(self, resolver: BackendResolver) -> None:
         self._backend_resolver = resolver
@@ -103,6 +105,19 @@ class Orchestrator:
         self, factory: Callable[[CliKind], CliRunner]
     ) -> None:
         self._cli_runner_factory = factory
+
+    def set_difficulty_gate(self, gate: Any) -> None:
+        """Register a difficulty-aware compute gate (v1.2, opt-in).
+
+        When set, :meth:`_spawn_agent` consults the gate before dispatching
+        each task. The gate rates the task 1-5 and the orchestrator uses
+        :meth:`Budget.allows_task_with_difficulty` to enforce a
+        difficulty-scaled per-task cap. Gate exceptions fail open — the task
+        dispatches normally.
+
+        Per CODA (arXiv 2603.08659) and TALE-EP.
+        """
+        self._difficulty_gate = gate
 
     def set_interrupt_handler(self, handler: InterruptHandler) -> None:
         """Register a human-in-the-loop handler.
@@ -367,6 +382,24 @@ class Orchestrator:
         for backwards compatibility.
         """
         async with self._sem:
+            # v1.2: difficulty-aware compute gate (opt-in).
+            # Consult the gate before dispatching; skip tasks that exceed
+            # their difficulty-scaled per-task cap. Fail open on gate errors.
+            if self._difficulty_gate is not None:
+                try:
+                    estimate = await self._difficulty_gate.estimate(task)
+                    estimated_cost = task.budget_usd
+                    if not self._budget.allows_task_with_difficulty(
+                        estimated_cost, difficulty=estimate.difficulty
+                    ):
+                        return AgentResult(
+                            task_id=task.id,
+                            agent_id=f"gated-{task.id[:8]}",
+                            state=AgentState.FAILED,
+                            error=f"budget_gated_difficulty_{estimate.difficulty}",
+                        )
+                except Exception:
+                    pass  # gate failure → fail open, dispatch normally
             choice = self._resolver_pick(task)
             if choice.kind is None:
                 return await self._spawn_native_agent(task)

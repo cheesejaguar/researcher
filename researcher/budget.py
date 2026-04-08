@@ -90,6 +90,29 @@ class Budget:
         ceiling = self.remaining() * self._per_task_fraction
         return estimated_usd <= ceiling
 
+    def allows_task_with_difficulty(
+        self, estimated_usd: float, difficulty: int
+    ) -> bool:
+        """Return True if a task at the given difficulty is within budget.
+
+        Easy tasks (``difficulty=1``) get a tighter cap (~1/5 of the normal
+        per-task fraction); hard tasks (``difficulty=5``) get the full
+        per-task fraction. Difficulty values outside ``[1, 5]`` fall back to
+        :meth:`allows_task`.
+
+        Per CODA (arXiv 2603.08659) and TALE-EP: scaling the spend cap by
+        rated difficulty prevents the "overthinking on simple tasks,
+        underthinking on hard ones" failure mode.
+        """
+        if not (1 <= difficulty <= 5):
+            return self.allows_task(estimated_usd)
+        if estimated_usd < 0:
+            return False
+        # Scale the per-task fraction by (difficulty / 5).
+        scaled_fraction = self._per_task_fraction * (difficulty / 5.0)
+        ceiling = self.remaining() * scaled_fraction
+        return estimated_usd <= ceiling
+
     def allows_entity(self, estimated_usd: float) -> bool:
         """True iff a proposed entity's estimated cost is within the per-entity fraction of total."""
         if estimated_usd < 0:
