@@ -12,12 +12,18 @@ import pytest
 
 from researcher.agents.subagent import SubagentResearcher
 from researcher.backends.models import CliKind
+from researcher.backends.resolver import BackendResolver
 from researcher.budget import Budget
-from researcher.events import SubagentCall
+from researcher.events import CycleEnd, CycleStart, RunComplete, SubagentCall
 from researcher.models import Task, TaskKind
+from researcher.orchestrator import Orchestrator, StopReason
+from researcher.scheduler import Scheduler
+from researcher.spec import EntitySpec, FieldSpec, RunSpec
+from researcher.storage.writer import FactWriter
 from tests.stubs.bus import StubEventBus
 from tests.stubs.cli_runner import StubCliRunner, make_wars_discover_result
 from tests.stubs.llm import StubLLMClient
+from tests.stubs.resolver import StubEntityResolver
 from tests.stubs.store import StubKnowledgeStore
 
 
@@ -87,3 +93,119 @@ async def test_subagent_smoke_end_to_end_offline():
 
     # Assert — runner was called exactly once
     assert len(runner.calls) == 1
+
+
+# ---------- Full orchestrator smoke ----------
+
+
+def _which_claude(cmd: str) -> str | None:
+    return "/usr/local/bin/claude" if cmd == "claude" else None
+
+
+async def _noop_fact(_entity_id, _claim):
+    return None
+
+
+async def _noop_conflict(_entity_id, _cells):
+    return None
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_full_run_smoke_offline():
+    """Full Orchestrator.run() loop with StubCliRunner — the integration smoke for Wave 1-E."""
+    runner = StubCliRunner()
+    runner.add_response_for_any(make_wars_discover_result())
+
+    spec = RunSpec(
+        spec_id="wars",
+        goal="Major interstate wars since 1500",
+        entities=[
+            EntitySpec(
+                name="War",
+                fields=[
+                    FieldSpec(name="name", type="str", required=True),
+                    FieldSpec(name="start_year", type="int", required=True),
+                    FieldSpec(name="end_year", type="int"),
+                    FieldSpec(name="belligerents", type="list[str]"),
+                ],
+                search_templates=[],
+            )
+        ],
+        seeds=["Major wars since 1500", "Wars of the 20th century"],
+        models={"fast": "stub", "smart": "stub", "heavy": "stub"},
+        backend_policy="auto",
+        max_cycles=1,
+    )
+
+    store = StubKnowledgeStore()
+    await store.open()
+    bus = StubEventBus()
+    llm = StubLLMClient()
+    budget = Budget(usd_cap=3.0, wall_cap_s=600)
+    resolver = StubEntityResolver()
+    entity_schema = {
+        "entity_type": "War",
+        "fields": [{"name": "name", "type": "str", "required": True}],
+    }
+    writer = FactWriter(
+        store=store,
+        resolver=resolver,
+        entity_schema=entity_schema,
+        emit_fact=_noop_fact,
+        emit_conflict=_noop_conflict,
+    )
+    scheduler = Scheduler(spec=spec, store=store)
+    backend_resolver = BackendResolver(which_fn=_which_claude)
+
+    orch = Orchestrator(
+        spec=spec,
+        store=store,  # type: ignore[arg-type]
+        llm=llm,  # type: ignore[arg-type]
+        bus=bus,  # type: ignore[arg-type]
+        writer=writer,
+        scheduler=scheduler,
+        budget=budget,
+        run_id="orch-smoke",
+        max_parallel_agents=2,
+    )
+    orch.set_backend_resolver(backend_resolver)
+    orch.set_cli_runner_factory(lambda kind: runner)
+
+    # Act
+    reason = await orch.run()
+
+    # Assert — stop reason is one of the expected terminal states
+    assert reason in (
+        StopReason.PLATEAU,
+        StopReason.NO_TASKS,
+        StopReason.BUDGET,
+        StopReason.DEADLINE,
+    ), f"unexpected stop reason: {reason}"
+
+    # Assert — two seeds became two tasks, each dispatched once
+    assert len(runner.calls) == 2
+
+    # Assert — claims submitted to the writer (4 per task × 2 tasks = 8)
+    assert writer.metrics["submitted"] == 8
+
+    # Assert — at least one CycleStart + CycleEnd + exactly one RunComplete
+    cycle_starts = [e for e in bus.events if isinstance(e, CycleStart)]
+    cycle_ends = [e for e in bus.events if isinstance(e, CycleEnd)]
+    run_completes = [e for e in bus.events if isinstance(e, RunComplete)]
+    assert len(cycle_starts) >= 1
+    assert len(cycle_ends) >= 1
+    assert len(run_completes) == 1
+
+    # Assert — two SubagentCall events (one per task)
+    subagent_events = [e for e in bus.events if isinstance(e, SubagentCall)]
+    assert len(subagent_events) == 2
+    assert all(e.payload.claims_emitted == 4 for e in subagent_events)
+    assert all(e.payload.cli_kind == "claude_code" for e in subagent_events)
+
+    # Assert — budget: zero cost, counter == 2
+    assert budget.total_spent() == 0.0
+    assert budget.subagent_calls_total == 2
+
+    # Assert — writer is fully drained (task done)
+    assert writer._task is not None
+    assert writer._task.done()
