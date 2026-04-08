@@ -82,9 +82,7 @@ class ExpandAgent(Agent):
         entity_schema: dict,
         goal: str,
     ) -> None:
-        super().__init__(
-            agent_id=agent_id, llm=llm, store=store, emit=emit, run_id=run_id
-        )
+        super().__init__(agent_id=agent_id, llm=llm, store=store, emit=emit, run_id=run_id)
         self._deps = deps
         self._entity_schema = entity_schema
         self._goal = goal
@@ -148,9 +146,9 @@ class ExpandAgent(Agent):
             allowed=allowed_fields,
         )
 
-        context = "\n\n---\n\n".join(
-            f"SOURCE: {url}\n{body}" for url, body in fetched
-        ) or "(no sources)"
+        context = (
+            "\n\n---\n\n".join(f"SOURCE: {url}\n{body}" for url, body in fetched) or "(no sources)"
+        )
 
         messages = [
             {
@@ -196,6 +194,15 @@ class ExpandAgent(Agent):
         primary_snippet = fetched[0][1][:500] if fetched else ""
 
         payload = response.model_dump() if isinstance(response, BaseModel) else dict(response)
+
+        # Optional skill-card-driven field validation. A field is rejected only
+        # if at least one matching skill card declares it in `output_schema` and
+        # the value fails validation. Fields not declared by any card always
+        # pass — the schema is opt-in guardrail, not exhaustive coverage.
+        skill_cards = []
+        if self._deps.skill_registry is not None:
+            skill_cards = self._deps.skill_registry.cards_for_entity_type(entity_type)
+
         for field_name, value in payload.items():
             if field_name == "_placeholder":
                 continue
@@ -203,6 +210,23 @@ class ExpandAgent(Agent):
                 continue
             if isinstance(value, list) and len(value) == 0:
                 continue
+            if skill_cards:
+                rejected_reason: str | None = None
+                for card in skill_cards:
+                    if not card.output_schema:
+                        continue
+                    if field_name not in card.output_schema:
+                        continue
+                    ok, reason = card.validate_output_field(field_name, value)
+                    if not ok:
+                        rejected_reason = reason
+                        break
+                if rejected_reason is not None:
+                    await self.log(
+                        "warn",
+                        f"skill schema rejected field {field_name}={value!r}: {rejected_reason}",
+                    )
+                    continue
             prov = Provenance(
                 url=primary_url,
                 fetched_at=now,
