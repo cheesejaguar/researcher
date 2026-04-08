@@ -553,3 +553,142 @@ async def test_stats_counts_coalesced_claims(tmp_path: Path):
         assert writer.stats["coalesced_claims"] == 1
     finally:
         await writer.stop()
+
+
+# ---------- Dataview inline fields ----------
+
+
+@pytest.mark.asyncio
+async def test_render_emits_dataview_inline_fields(tmp_path: Path):
+    """Each spec field should appear as both YAML frontmatter AND inline [field:: value]."""
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        await writer.on_fact(_sample_claim(field_name="start_year", value=1939), run_id="r1")
+        await writer.on_fact(_sample_claim(field_name="end_year", value=1945, span="cli_1"), run_id="r1")
+        await writer.flush()
+    finally:
+        await writer.stop()
+
+    md = (tmp_path / "researcher" / "War" / "World War II.md").read_text()
+    # Frontmatter (already present)
+    assert "start_year: 1939" in md
+    # Inline fields (new — Dataview-scrapable from body)
+    assert "[start_year:: 1939]" in md
+    assert "[end_year:: 1945]" in md
+
+
+# ---------- Entity-type index note ----------
+
+
+@pytest.mark.asyncio
+async def test_writer_generates_index_note_per_entity_type(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        await writer.on_fact(_sample_claim(entity_type="War", entity_name="WWII"), run_id="r1")
+        await writer.on_fact(
+            _sample_claim(entity_type="Trial", entity_name="NCT12345", field_name="phase", value=3),
+            run_id="r1",
+        )
+        await writer.flush()
+        await writer.write_index_notes()
+    finally:
+        await writer.stop()
+
+    war_index = tmp_path / "researcher" / "War" / "_index.md"
+    trial_index = tmp_path / "researcher" / "Trial" / "_index.md"
+    assert war_index.exists()
+    assert trial_index.exists()
+
+    war_content = war_index.read_text()
+    assert "```dataview" in war_content
+    assert "TABLE" in war_content
+    # Should mention the entity type folder for the FROM clause
+    assert "researcher/War" in war_content
+
+
+# ---------- Wikilink injection ----------
+
+
+@pytest.mark.asyncio
+async def test_inject_wikilinks_wraps_known_entity_names(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        # Create two entities. The first mentions the second's name in a snippet.
+        await writer.on_fact(
+            FactClaim(
+                entity_type="War",
+                entity_name="World War II",
+                field="related",
+                value="World War I was a precursor",
+                confidence=0.9,
+                provenance=Provenance(
+                    url="https://example.com",
+                    fetched_at=datetime.now(UTC),
+                    snippet="World War I was a precursor",
+                    extractor_model="test",
+                    agent_id="a1",
+                    task_id="t1",
+                    span_id="s0",
+                ),
+                emitted_by="a1",
+                task_id="t1",
+            ),
+            run_id="r1",
+        )
+        await writer.on_fact(
+            _sample_claim(entity_type="War", entity_name="World War I", field_name="start_year", value=1914),
+            run_id="r1",
+        )
+        await writer.flush()
+        # Now inject wikilinks: pass the set of known entity names.
+        await writer.inject_wikilinks(known_names={"World War II", "World War I"})
+    finally:
+        await writer.stop()
+
+    wwii_md = (tmp_path / "researcher" / "War" / "World War II.md").read_text()
+    # The body should now contain a wikilink to World War I (in the snippet quote).
+    assert "[[World War I]]" in wwii_md
+
+
+@pytest.mark.asyncio
+async def test_inject_wikilinks_does_not_wrap_self(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        await writer.on_fact(_sample_claim(entity_name="WWII"), run_id="r1")
+        await writer.flush()
+        await writer.inject_wikilinks(known_names={"WWII"})
+    finally:
+        await writer.stop()
+
+    md = (tmp_path / "researcher" / "War" / "WWII.md").read_text()
+    # Self-references should NOT become wikilinks.
+    assert "[[WWII]]" not in md or md.count("[[WWII]]") == 0
+
+
+# ---------- See Also section ----------
+
+
+@pytest.mark.asyncio
+async def test_see_also_section_added_when_neighbors_provided(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        await writer.on_fact(_sample_claim(entity_name="WWII"), run_id="r1")
+        await writer.flush()
+        # Inject neighbor mapping: WWII → [WWI, Korean War]
+        await writer.write_see_also(
+            neighbors={
+                ("War", "WWII"): [("War", "WWI"), ("War", "Korean War")],
+            }
+        )
+    finally:
+        await writer.stop()
+
+    md = (tmp_path / "researcher" / "War" / "WWII.md").read_text()
+    assert "## See Also" in md
+    assert "[[WWI]]" in md
+    assert "[[Korean War]]" in md

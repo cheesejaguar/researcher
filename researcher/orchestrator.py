@@ -333,6 +333,23 @@ class Orchestrator:
             except Exception:
                 pass
             if self._obsidian_writer is not None:
+                # Post-flush surface-up hooks: wrap known-entity names in
+                # [[wikilinks]] and emit per-type _index.md Dataview notes.
+                # Best-effort: a stub store that doesn't implement `query`
+                # (NotImplementedError) simply skips wikilink injection.
+                try:
+                    rows = await self._store.query(  # type: ignore[attr-defined]
+                        "SELECT name FROM entities"
+                    )
+                    known = {r["name"] for r in rows if r.get("name")}
+                    if known:
+                        await self._obsidian_writer.inject_wikilinks(known)
+                except Exception:
+                    pass
+                try:
+                    await self._obsidian_writer.write_index_notes()
+                except Exception:
+                    pass
                 try:
                     await self._obsidian_writer.stop()
                 except Exception:
