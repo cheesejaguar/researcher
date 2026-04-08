@@ -185,9 +185,8 @@ async def _execute_run(
     Imports are lazy so `researcher --help` doesn't pull in DuckDB, Pydantic
     model factories, or sentence-transformers on every invocation.
     """
-    from datetime import datetime
-
     import os
+    from datetime import datetime
 
     from researcher.agents.native_deps import NativeAgentDeps
     from researcher.backends.cli_runner import ClaudeCodeRunner, CodexRunner
@@ -230,7 +229,7 @@ async def _execute_run(
     entity_schema_dict = {
         "entity_type": primary_entity.name,
         "fields": [
-            {"name": f.name, "type": f.type, "required": f.required} for f in primary_entity.fields
+            {"name": f.name, "type": f.type, "required": f.required, "enum": list(f.enum)} for f in primary_entity.fields
         ],
     }
 

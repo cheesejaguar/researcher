@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 from datetime import UTC, datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, create_model
@@ -49,7 +49,12 @@ def _resolve_field_type(type_str: str) -> type:
 def _build_response_model(
     entity_type: str, field_specs: list[dict], allowed: list[str] | None
 ) -> type[BaseModel]:
-    """Build a Pydantic model where every field is Optional[T] with default None."""
+    """Build a Pydantic model where every field is Optional[T] with default None.
+
+    Honors the optional ``enum`` key on each field spec: when present, the
+    field is narrowed to a ``Literal[*enum]`` (or a list of literals for
+    ``list[str]`` fields) so the LLM is constrained to a closed vocabulary.
+    """
     fields: dict[str, Any] = {}
     for f in field_specs:
         name = f.get("name")
@@ -59,7 +64,15 @@ def _build_response_model(
             continue
         if not name:
             continue
-        py_type = _resolve_field_type(f.get("type", "str"))
+        enum_values = f.get("enum") or []
+        if enum_values:
+            literal_type = Literal[tuple(enum_values)]  # type: ignore[valid-type]
+            if f.get("type", "str").strip() == "list[str]":
+                py_type = list[literal_type]  # type: ignore[valid-type]
+            else:
+                py_type = literal_type  # type: ignore[assignment]
+        else:
+            py_type = _resolve_field_type(f.get("type", "str"))
         fields[name] = (Optional[py_type], Field(default=None))
     if not fields:
         fields["_placeholder"] = (Optional[str], Field(default=None))

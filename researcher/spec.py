@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 import yaml
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, Field, create_model, model_validator
 
 # ---------- Supported field types ----------
 
@@ -49,6 +49,23 @@ class FieldSpec(BaseModel):
     name: str
     type: str  # "str" | "int" | "float" | "bool" | "date" | "datetime" | "list[str]" | "list[int]"
     required: bool = False
+    # Optional closed vocabulary. When set, build_entity_class constrains the
+    # field to ``Literal[*enum]`` (or ``list[Literal[*enum]]`` for list types)
+    # so extractors must choose one of the declared values. Only meaningful
+    # for str / list[str] fields; ignored for numeric / date / bool types.
+    enum: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _enum_requires_str_type(self) -> FieldSpec:
+        if not self.enum:
+            return self
+        t = self.type.strip()
+        if t != "str" and t != "list[str]":
+            raise ValueError(
+                f"field {self.name!r}: enum is only supported for 'str' "
+                f"or 'list[str]' fields, got {self.type!r}"
+            )
+        return self
 
 
 class EntitySpec(BaseModel):
@@ -136,13 +153,24 @@ def build_entity_class(spec: EntitySpec) -> type[BaseModel]:
     """Build a Pydantic model class from an EntitySpec.
 
     Required fields are declared with `...` (no default); optional fields default
-    to None and are typed `Optional[T]`. The returned class is named after
-    `spec.name` and is suitable for introspection by the KnowledgeStore's
-    `init_schema` to derive DuckDB column types.
+    to None and are typed `Optional[T]`. Fields with a non-empty ``enum`` are
+    narrowed to a ``Literal[...]`` over that vocabulary (or a list of literals
+    for ``list[str]`` fields). The returned class is named after ``spec.name``
+    and is suitable for introspection by the KnowledgeStore's ``init_schema``
+    to derive DuckDB column types.
     """
     fields: dict[str, Any] = {}
     for f in spec.fields:
-        py_type = _resolve_type(f.type)
+        if f.enum:
+            # Literal[*enum] — closed vocabulary. Fall through to the
+            # required/optional wrapping below.
+            literal_type = Literal[tuple(f.enum)]  # type: ignore[valid-type]
+            if f.type.strip() == "list[str]":
+                py_type = list[literal_type]  # type: ignore[valid-type]
+            else:
+                py_type = literal_type  # type: ignore[assignment]
+        else:
+            py_type = _resolve_type(f.type)
         if f.required:
             fields[f.name] = (py_type, ...)
         else:

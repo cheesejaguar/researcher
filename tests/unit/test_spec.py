@@ -284,3 +284,138 @@ def test_runspec_obsidian_vault_accepts_path():
         obsidian_vault="~/Documents/Vault",
     )
     assert s.obsidian_vault == "~/Documents/Vault"
+
+
+# ---------- FieldSpec.enum ----------
+
+
+def test_field_spec_enum_on_str_field_is_valid():
+    f = FieldSpec(name="color", type="str", enum=["red", "green", "blue"])
+    assert f.enum == ["red", "green", "blue"]
+
+
+def test_field_spec_enum_on_list_str_field_is_valid():
+    f = FieldSpec(name="tags", type="list[str]", enum=["a", "b"])
+    assert f.enum == ["a", "b"]
+
+
+def test_field_spec_enum_on_int_field_is_rejected():
+    with pytest.raises(ValidationError) as exc:
+        FieldSpec(name="count", type="int", enum=["1", "2"])
+    assert "enum is only supported" in str(exc.value)
+
+
+def test_field_spec_enum_on_date_field_is_rejected():
+    with pytest.raises(ValidationError):
+        FieldSpec(name="when", type="date", enum=["yesterday", "today"])
+
+
+def test_build_entity_class_with_enum_accepts_valid_value():
+    spec = EntitySpec(
+        name="Thing",
+        fields=[
+            FieldSpec(name="name", type="str", required=True),
+            FieldSpec(name="color", type="str", enum=["red", "green", "blue"]),
+        ],
+    )
+    Cls = build_entity_class(spec)
+    obj = Cls(name="widget", color="red")
+    assert obj.color == "red"
+
+
+def test_build_entity_class_with_enum_rejects_invalid_value():
+    spec = EntitySpec(
+        name="Thing",
+        fields=[
+            FieldSpec(name="name", type="str", required=True),
+            FieldSpec(name="color", type="str", enum=["red", "green"]),
+        ],
+    )
+    Cls = build_entity_class(spec)
+    with pytest.raises(ValidationError):
+        Cls(name="widget", color="purple")
+
+
+def test_build_entity_class_with_list_enum_accepts_valid_list():
+    spec = EntitySpec(
+        name="Thing",
+        fields=[
+            FieldSpec(name="name", type="str", required=True),
+            FieldSpec(name="tags", type="list[str]", enum=["hot", "cold"]),
+        ],
+    )
+    Cls = build_entity_class(spec)
+    obj = Cls(name="x", tags=["hot", "cold"])
+    assert obj.tags == ["hot", "cold"]
+
+
+def test_build_entity_class_with_list_enum_rejects_invalid_member():
+    spec = EntitySpec(
+        name="Thing",
+        fields=[
+            FieldSpec(name="name", type="str", required=True),
+            FieldSpec(name="tags", type="list[str]", enum=["hot", "cold"]),
+        ],
+    )
+    Cls = build_entity_class(spec)
+    with pytest.raises(ValidationError):
+        Cls(name="x", tags=["lukewarm"])
+
+
+def test_build_entity_class_enum_optional_field_allows_none():
+    spec = EntitySpec(
+        name="Thing",
+        fields=[
+            FieldSpec(name="name", type="str", required=True),
+            FieldSpec(name="color", type="str", enum=["red", "green"]),  # not required
+        ],
+    )
+    Cls = build_entity_class(spec)
+    obj = Cls(name="x")  # color omitted
+    assert obj.color is None
+
+
+def test_expand_agent_response_model_honors_enum():
+    """ExpandAgent's runtime response model must also narrow to Literal."""
+    from researcher.agents.expand import _build_response_model
+
+    field_specs = [
+        {"name": "name", "type": "str", "required": True, "enum": []},
+        {"name": "color", "type": "str", "required": False, "enum": ["red", "blue"]},
+        {"name": "size", "type": "str", "required": False, "enum": []},
+    ]
+    Model = _build_response_model("Thing", field_specs, allowed=None)
+    # Valid enum value → OK.
+    obj = Model(color="red", size="large")
+    assert obj.color == "red"
+    assert obj.size == "large"
+    # Invalid enum value → ValidationError.
+    with pytest.raises(ValidationError):
+        Model(color="purple")
+
+
+def test_load_spec_supports_enum_in_yaml(tmp_path: Path):
+    p = tmp_path / "s.yaml"
+    p.write_text(
+        """
+spec_id: t
+goal: t
+entities:
+  - name: Thing
+    fields:
+      - { name: name,  type: str, required: true }
+      - { name: color, type: str, enum: [red, green, blue] }
+seeds: ["x"]
+models:
+  fast: stub
+  smart: stub
+  heavy: stub
+"""
+    )
+    spec = load_spec(p)
+    color_field = next(f for f in spec.entities[0].fields if f.name == "color")
+    assert color_field.enum == ["red", "green", "blue"]
+    # And the generated class enforces the vocabulary end-to-end.
+    Cls = build_entity_class(spec.entities[0])
+    with pytest.raises(ValidationError):
+        Cls(name="x", color="purple")
