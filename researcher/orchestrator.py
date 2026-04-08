@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Callable, Optional
 
 from researcher.budget import Budget, BudgetExceededError
 from researcher.events import (
@@ -39,6 +39,9 @@ from researcher.scheduler import Scheduler
 from researcher.spec import RunSpec
 from researcher.storage.store import KnowledgeStore
 from researcher.storage.writer import FactWriter
+from researcher.backends.cli_runner import CliRunner
+from researcher.backends.models import BackendChoice, CliKind
+from researcher.backends.resolver import BackendResolver
 
 
 class StopReason(str, Enum):
@@ -48,6 +51,7 @@ class StopReason(str, Enum):
     CTRL_C = "ctrl_c"
     ERROR = "error"
     NO_TASKS = "no_tasks"
+    SUBAGENT_CAP = "subagent_cap"
 
 
 class Orchestrator:
@@ -74,6 +78,44 @@ class Orchestrator:
         self._sem = asyncio.Semaphore(max_parallel_agents)
         self._cycle = 0
         self._started_at: Optional[datetime] = None
+        self._backend_resolver: Optional[BackendResolver] = None
+        self._cli_runner_factory: Optional[Callable[[CliKind], CliRunner]] = None
+        self._cycle_subagent_failures: int = 0
+        self._circuit_break_threshold: int = 3
+
+    def set_backend_resolver(self, resolver: BackendResolver) -> None:
+        self._backend_resolver = resolver
+
+    def set_cli_runner_factory(
+        self, factory: Callable[[CliKind], CliRunner]
+    ) -> None:
+        self._cli_runner_factory = factory
+
+    def _resolver_pick(self, task: Task) -> BackendChoice:
+        if self._backend_resolver is None:
+            return BackendChoice(kind=None, reason="no resolver configured")
+        return self._backend_resolver.pick(policy=self._spec.backend_policy)  # type: ignore[arg-type]
+
+    def _record_subagent_failure(self, error: str) -> None:
+        """Update the per-cycle failure counter and trip circuit break if warranted."""
+        if self._backend_resolver is None:
+            return
+        # Immediate trip on auth / usage errors.
+        if error == "auth_required":
+            self._backend_resolver.clear_detected("auth_required")
+            return
+        if error == "usage_limit_reached":
+            self._backend_resolver.clear_detected("usage_limit_reached")
+            return
+        # Count other failures; trip after threshold.
+        self._cycle_subagent_failures += 1
+        if self._cycle_subagent_failures >= self._circuit_break_threshold:
+            self._backend_resolver.clear_detected(
+                f"{self._cycle_subagent_failures} failures in cycle"
+            )
+
+    def _reset_cycle_failure_counters(self) -> None:
+        self._cycle_subagent_failures = 0
 
     async def run(self) -> StopReason:
         self._started_at = datetime.now(timezone.utc)

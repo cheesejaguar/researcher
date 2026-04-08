@@ -85,3 +85,11 @@ def test_clear_detected_is_sticky_for_the_run():
     # Even after more calls, detected stays empty.
     r.pick(policy="auto")
     assert r.detected == []
+
+
+def test_cli_policy_after_circuit_break_raises_with_circuit_break_message():
+    """I-1 fix: the error message should say 'circuit-broken', not 'no CLI detected'."""
+    r = BackendResolver(which_fn=_which_claude_only)
+    r.clear_detected("usage_limit_reached")
+    with pytest.raises(BackendUnavailableError, match="circuit-broken"):
+        r.pick(policy="cli")

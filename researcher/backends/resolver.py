@@ -62,11 +62,15 @@ class BackendResolver:
             return BackendChoice(kind=None, reason="policy=api")
 
         if policy == "cli":
-            if not self.detected:
+            if self._cleared_reason is not None:
+                raise BackendUnavailableError(
+                    f"policy=cli but CLI path is circuit-broken: {self._cleared_reason}"
+                )
+            if not self._detected:
                 raise BackendUnavailableError(
                     "policy=cli but no CLI subagent detected on PATH (looked for: claude, codex)"
                 )
-            kind = self.detected[0]
+            kind = self._detected[0]
             return BackendChoice(kind=kind, reason=f"policy=cli, picked {kind.value}")
 
         # policy == "auto"
