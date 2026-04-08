@@ -482,6 +482,7 @@ class Orchestrator:
                 entity_schema=entity_type_dict,
                 budget=self._budget,
                 goal=self._spec.goal,
+                max_entities=self._spec.max_entities_per_subagent_call,
                 timeout_s=float(self._spec.subagent_timeout_s),
             )
             return await agent.run(task)

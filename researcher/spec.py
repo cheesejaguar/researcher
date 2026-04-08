@@ -112,6 +112,11 @@ class RunSpec(BaseModel):
     backend_policy: Literal["auto", "cli", "api"] = "auto"
     max_subagent_calls: int = 500
     subagent_timeout_s: int = 120
+    # Per-subagent-call workload cap: how many entities each `claude -p` /
+    # `codex exec` invocation is asked to return. Lower values = shorter
+    # per-call wall time, higher throughput under a fixed timeout at the
+    # cost of more subagent calls total. Native path ignores this.
+    max_entities_per_subagent_call: int = 10
     # Obsidian integration — when set, a secondary ObsidianWriter sink
     # materializes FactClaims into Markdown files in this vault.
     obsidian_vault: Optional[str] = None

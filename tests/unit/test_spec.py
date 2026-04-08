@@ -375,6 +375,41 @@ def test_build_entity_class_enum_optional_field_allows_none():
     assert obj.color is None
 
 
+def test_runspec_max_entities_per_subagent_call_default():
+    s = RunSpec(
+        spec_id="x",
+        goal="g",
+        entities=[
+            EntitySpec(
+                name="T",
+                fields=[FieldSpec(name="name", type="str", required=True)],
+                search_templates=[],
+            )
+        ],
+        seeds=["s"],
+        models={"fast": "m"},
+    )
+    assert s.max_entities_per_subagent_call == 10
+
+
+def test_runspec_max_entities_per_subagent_call_accepts_override():
+    s = RunSpec(
+        spec_id="x",
+        goal="g",
+        entities=[
+            EntitySpec(
+                name="T",
+                fields=[FieldSpec(name="name", type="str", required=True)],
+                search_templates=[],
+            )
+        ],
+        seeds=["s"],
+        models={"fast": "m"},
+        max_entities_per_subagent_call=3,
+    )
+    assert s.max_entities_per_subagent_call == 3
+
+
 def test_expand_agent_response_model_honors_enum():
     """ExpandAgent's runtime response model must also narrow to Literal."""
     from researcher.agents.expand import _build_response_model
