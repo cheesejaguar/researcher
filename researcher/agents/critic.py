@@ -62,23 +62,27 @@ class CriticAgent(Agent):
 
         trigger_agent = task.field_hints[0] if task.field_hints else "unknown"
         entity_type = self._entity_schema.get("entity_type", "Entity")
+        # CoVe independence (v1.2 #5): the critic MUST operate on raw inputs
+        # only (entity type + task description). It does NOT get the
+        # verifier's output, prior claims, or any chained agent results.
+        # Per Chain-of-Verification (ACL 2024), independent verification
+        # outperforms conditioned verification by ~3.7 F1 on factual QA.
+        system_msg = (
+            "You are a critic agent. Independently review the research "
+            "trajectory for an entity and propose ONE skill card that would "
+            "improve future research on this domain. You operate "
+            "independently — do not condition on prior verifier output. "
+            "Return JSON matching the schema."
+        )
+        user_msg = (
+            f"Entity type: {entity_type}\n"
+            f"Entity id: {task.target_entity_id or 'unknown'}\n"
+            f"Task: {task.seed_query or 'critique the research trajectory'}\n\n"
+            "Propose a skill card with: name, description, prompt_fragment."
+        )
         messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a critic that reviews research trajectories. "
-                    "Suggest improvements as a short skill card with a name, "
-                    "description, and a reusable prompt fragment."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Entity type under research: {entity_type}\n"
-                    f"Triggering agent: {trigger_agent}\n\n"
-                    f"Return a short skill card (name, description, prompt_fragment)."
-                ),
-            },
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
         ]
 
         await self.set_state(AgentState.EXTRACTING)
