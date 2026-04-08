@@ -82,6 +82,16 @@ class DuckDBKnowledgeStore(KnowledgeStore):
         self._opened = False
         self._vss_enabled: bool = False
         self._duckpgq_enabled: bool = False
+        # Optional CostTracker hook. When set (via set_cost_tracker), the
+        # store's snapshot_metrics reads the real USD total from it instead
+        # of reporting 0.0 unconditionally.
+        self._cost_tracker: Any = None
+
+    def set_cost_tracker(self, tracker: Any) -> None:
+        """Install an optional CostTracker so snapshot_metrics can report
+        real USD spend. The tracker must expose ``total_usd() -> float``.
+        """
+        self._cost_tracker = tracker
 
     # ---- lifecycle -------------------------------------------------------
 
@@ -962,12 +972,19 @@ class DuckDBKnowledgeStore(KnowledgeStore):
                 "SELECT COUNT(*) FROM conflicts WHERE status = 'open'"
             ).fetchone()[0]
 
+            cost_usd_total = 0.0
+            if self._cost_tracker is not None:
+                try:
+                    cost_usd_total = float(self._cost_tracker.total_usd())
+                except Exception:
+                    cost_usd_total = 0.0
+
             return StoreMetrics(
                 entities_total=int(entities_total),
                 by_type=by_type,
                 fields_filled_pct=float(fields_filled_pct),
                 conflicts_open=int(conflicts_open),
-                cost_usd_total=0.0,
+                cost_usd_total=cost_usd_total,
             )
 
     async def write_run_summary(self, run_id: str, summary: dict) -> None:

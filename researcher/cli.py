@@ -363,6 +363,10 @@ async def _execute_run(
                         LLMTier.HEAVY: spec_obj.models.get("heavy", "anthropic/claude-opus-4.6"),
                     },
                 )
+            # Wire the LLM's cost tracker into the store so snapshot_metrics
+            # reports real USD spend instead of hardcoded 0.0.
+            if hasattr(store, "set_cost_tracker") and hasattr(llm, "cost_tracker"):
+                store.set_cost_tracker(llm.cost_tracker)
 
             # Optional Obsidian sink. CLI flag overrides the spec file.
             obsidian = None

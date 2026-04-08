@@ -100,6 +100,55 @@ async def test_snapshot_metrics_reports_counts(tmp_path: Path):
         assert m.entities_total == 3
         assert m.by_type["War"] == 2
         assert m.by_type["Trial"] == 1
+        # No cost tracker installed → cost_usd_total stays 0.0.
+        assert m.cost_usd_total == 0.0
+    finally:
+        await store.close()
+
+
+class _FakeCostTracker:
+    def __init__(self, total: float) -> None:
+        self._total = total
+        self.calls = 0
+
+    def total_usd(self) -> float:
+        self.calls += 1
+        return self._total
+
+
+class _BrokenCostTracker:
+    def total_usd(self) -> float:
+        raise RuntimeError("tracker exploded")
+
+
+@pytest.mark.asyncio
+async def test_snapshot_metrics_reads_cost_from_injected_tracker(tmp_path: Path):
+    """snapshot_metrics reports the real USD total when a tracker is wired."""
+    store = DuckDBKnowledgeStore(db_path=tmp_path / "s.duckdb")
+    tracker = _FakeCostTracker(total=1.2345)
+    store.set_cost_tracker(tracker)
+
+    await store.open()
+    try:
+        await store.init_schema(WarEntity)
+        m = await store.snapshot_metrics()
+        assert m.cost_usd_total == pytest.approx(1.2345)
+        assert tracker.calls == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_metrics_swallows_cost_tracker_errors(tmp_path: Path):
+    """A raising tracker falls back to 0.0 instead of crashing metrics."""
+    store = DuckDBKnowledgeStore(db_path=tmp_path / "s.duckdb")
+    store.set_cost_tracker(_BrokenCostTracker())
+
+    await store.open()
+    try:
+        await store.init_schema(WarEntity)
+        m = await store.snapshot_metrics()
+        assert m.cost_usd_total == 0.0
     finally:
         await store.close()
 
