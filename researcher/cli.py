@@ -441,6 +441,46 @@ def graph(
 
 
 @app.command()
+def migrate(
+    run_id: str = typer.Argument(..., help="Run id whose store to inspect."),
+    runs_dir: Path = typer.Option(
+        Path("runs"), "--runs-dir", help="Directory where run artifacts live."
+    ),
+) -> None:
+    """List schema migrations recorded for a run (v1.2 audit trail)."""
+    import asyncio as _asyncio
+
+    db_path = runs_dir / run_id / "store.duckdb"
+    if not db_path.exists():
+        raise typer.BadParameter(f"no store found at {db_path}")
+
+    async def _list() -> None:
+        from researcher.storage.duckdb_store import DuckDBKnowledgeStore
+
+        store = DuckDBKnowledgeStore(db_path=db_path)
+        await store.open()
+        try:
+            rows = await store.query(
+                "SELECT entity_class_name, migration_type, diff_added_json, "
+                "       diff_removed_json, applied_at "
+                "FROM schema_migrations ORDER BY applied_at"
+            )
+            if not rows:
+                typer.echo("(no migrations recorded)")
+                return
+            for r in rows:
+                typer.echo(
+                    f"{r['applied_at']}  {r['entity_class_name']}  "
+                    f"{r['migration_type']}  added={r['diff_added_json']}  "
+                    f"removed={r['diff_removed_json']}"
+                )
+        finally:
+            await store.close()
+
+    _asyncio.run(_list())
+
+
+@app.command()
 def version() -> None:
     """Print researcher version."""
     typer.echo(__version__)

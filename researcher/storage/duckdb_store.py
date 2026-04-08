@@ -218,6 +218,29 @@ class DuckDBKnowledgeStore(KnowledgeStore):
             )
             """
         )
+        # v1.2 schema-migration audit trail. Every init_schema call that
+        # detects a schema change records a row here so operators can see
+        # exactly when fields were added/removed. DuckDB has no
+        # AUTO_INCREMENT; we use an explicit sequence for the id column.
+        c.execute(
+            """
+            CREATE SEQUENCE IF NOT EXISTS schema_migrations_id_seq START 1
+            """
+        )
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                id INTEGER PRIMARY KEY,
+                entity_class_name TEXT NOT NULL,
+                schema_hash TEXT NOT NULL,
+                schema_json TEXT NOT NULL,
+                migration_type TEXT NOT NULL,
+                diff_added_json TEXT,
+                diff_removed_json TEXT,
+                applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         c.execute(
             """
             CREATE TABLE IF NOT EXISTS run_checkpoints (
@@ -273,19 +296,114 @@ class DuckDBKnowledgeStore(KnowledgeStore):
 
     # ---- schema registration --------------------------------------------
 
-    async def init_schema(self, entity_class: type[BaseModel]) -> None:
+    async def init_schema(
+        self, entity_class: type[BaseModel], force: bool = False
+    ) -> None:
+        """Register an entity class's schema with migration audit trail.
+
+        v1.2 behavior:
+
+        - First call (no prior ``schema_migrations`` rows) records an
+          ``initial`` migration.
+        - Subsequent call with identical schema hash: idempotent no-op.
+        - Subsequent call with only added fields: records an
+          ``additive`` migration.
+        - Subsequent call that removes (or renames) fields: raises
+          :class:`SchemaMigrationError` unless ``force=True``, in which
+          case it records a ``breaking_forced`` migration.
+
+        The legacy ``schema_meta`` upsert still runs so existing queries
+        against that table continue to return the most-recent schema.
+        """
+        from researcher.storage.migrations import (
+            SchemaMigrationError,
+            compute_schema_hash,
+        )
+
         async with self._lock:
             conn = self._require_conn()
-            schema_json = json.dumps(entity_class.model_json_schema())
-            # DuckDB doesn't support INSERT OR REPLACE; emulate via DELETE+INSERT.
+            new_hash = compute_schema_hash(entity_class)
+            new_schema_dict = entity_class.model_json_schema()
+            new_schema_json = json.dumps(new_schema_dict)
+            new_class_name = entity_class.__name__
+
+            # Look up the most recent migration row across all entity
+            # classes. Wave 1 runs with a single entity type per store so
+            # "latest row" is the right comparison baseline.
+            latest_row = conn.execute(
+                "SELECT entity_class_name, schema_hash, schema_json "
+                "FROM schema_migrations ORDER BY applied_at DESC, id DESC LIMIT 1"
+            ).fetchone()
+
+            if latest_row is None:
+                # First-time init — record an 'initial' migration.
+                conn.execute(
+                    "INSERT INTO schema_migrations "
+                    "(id, entity_class_name, schema_hash, schema_json, "
+                    " migration_type) "
+                    "VALUES (nextval('schema_migrations_id_seq'), ?, ?, ?, "
+                    "'initial')",
+                    [new_class_name, new_hash, new_schema_json],
+                )
+                self._record_schema_meta(conn, new_class_name, new_schema_json)
+                return
+
+            _prev_class_name, prev_hash, prev_schema_json = latest_row
+
+            if prev_hash == new_hash:
+                # Idempotent: same schema, no migration recorded.
+                return
+
+            # Compute a field-name diff directly from the stored JSON
+            # schema so we don't need to reconstruct a Pydantic class
+            # for the prior version.
+            prev_schema = json.loads(prev_schema_json)
+            prev_fields = set(prev_schema.get("properties", {}).keys())
+            new_fields = set(new_schema_dict.get("properties", {}).keys())
+            added = new_fields - prev_fields
+            removed = prev_fields - new_fields
+
+            if removed and not force:
+                raise SchemaMigrationError(
+                    f"Breaking schema change for {new_class_name}: "
+                    f"removed fields {sorted(removed)}. "
+                    f"Pass force=True to override and record as "
+                    f"'breaking_forced'."
+                )
+
+            migration_type = "breaking_forced" if removed else "additive"
             conn.execute(
-                "DELETE FROM schema_meta WHERE entity_class_name = ?",
-                [entity_class.__name__],
+                "INSERT INTO schema_migrations "
+                "(id, entity_class_name, schema_hash, schema_json, "
+                " migration_type, diff_added_json, diff_removed_json) "
+                "VALUES (nextval('schema_migrations_id_seq'), ?, ?, ?, ?, "
+                "?, ?)",
+                [
+                    new_class_name,
+                    new_hash,
+                    new_schema_json,
+                    migration_type,
+                    json.dumps(sorted(added)),
+                    json.dumps(sorted(removed)),
+                ],
             )
-            conn.execute(
-                "INSERT INTO schema_meta VALUES (?, ?)",
-                [entity_class.__name__, schema_json],
-            )
+            self._record_schema_meta(conn, new_class_name, new_schema_json)
+
+    def _record_schema_meta(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        entity_class_name: str,
+        schema_json: str,
+    ) -> None:
+        """Upsert the latest JSON schema into the legacy schema_meta table."""
+        conn.execute(
+            "DELETE FROM schema_meta WHERE entity_class_name = ?",
+            [entity_class_name],
+        )
+        conn.execute(
+            "INSERT INTO schema_meta VALUES (?, ?)",
+            [entity_class_name, schema_json],
+        )
 
     # ---- entities --------------------------------------------------------
 
