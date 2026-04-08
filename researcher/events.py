@@ -87,6 +87,15 @@ class RunCompletePayload(BaseModel):
     db_path: str
 
 
+class SubagentCallPayload(BaseModel):
+    agent_id: str
+    task_id: str
+    cli_kind: Literal["claude_code", "codex"]
+    wall_ms: int
+    exit_code: int | None
+    claims_emitted: int
+
+
 # ---------- Event envelope ----------
 
 
@@ -151,6 +160,11 @@ class RunComplete(_EventBase):
     payload: RunCompletePayload
 
 
+class SubagentCall(_EventBase):
+    type: Literal["subagent_call"] = "subagent_call"
+    payload: SubagentCallPayload
+
+
 Event = Annotated[
     Union[
         CycleStart,
@@ -164,6 +178,7 @@ Event = Annotated[
         CostUpdate,
         BudgetWarning,
         RunComplete,
+        SubagentCall,
     ],
     Field(discriminator="type"),
 ]
