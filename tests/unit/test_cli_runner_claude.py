@@ -38,6 +38,27 @@ def _claude_envelope(result_json: str, input_tokens: int = 100, output_tokens: i
     ).encode()
 
 
+def _claude_envelope_structured(
+    structured_output: dict, input_tokens: int = 100, output_tokens: int = 50
+) -> bytes:
+    """New envelope shape (claude v2.1+ with --json-schema).
+
+    The validated structured payload lives on a top-level
+    ``structured_output`` key; ``result`` is an empty string.
+    """
+    return json.dumps(
+        {
+            "type": "result",
+            "subtype": "success",
+            "result": "",
+            "structured_output": structured_output,
+            "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+            "total_cost_usd": 0.0,
+            "is_error": False,
+        }
+    ).encode()
+
+
 @pytest.mark.asyncio
 async def test_argv_construction_includes_required_flags():
     valid = _claude_envelope(
@@ -175,6 +196,71 @@ async def test_auth_required_pattern_match():
 
     assert not result.ok
     assert result.error == "auth_required"
+
+
+@pytest.mark.asyncio
+async def test_parses_new_structured_output_envelope():
+    """Regression guard for the claude v2.1+ envelope shape.
+
+    When --json-schema is used, claude writes the validated payload to a
+    top-level ``structured_output`` key and leaves ``result`` as an empty
+    string. The runner must prefer structured_output over result.
+    """
+    inner = {
+        "entity_name": "Operation True Promise II",
+        "extractions": [
+            {
+                "field": "event_date",
+                "value": "2024-10-01",
+                "source_url": "https://en.wikipedia.org/wiki/October_2024_Iranian_strikes_on_Israel",
+                "snippet": "Iran launched the attack on October 1, 2024",
+                "confidence": 0.99,
+            }
+        ],
+        "diagnostics": "",
+    }
+    envelope = _claude_envelope_structured(inner)
+
+    async def fake_exec(*argv, **kwargs):
+        return _fake_process(stdout=envelope)
+
+    runner = ClaudeCodeRunner(model="sonnet")
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+        result = await runner.execute(prompt="p", schema=SCHEMA, timeout_s=30)
+
+    assert result.ok, f"expected ok=True, got error={result.error}"
+    assert result.data is not None
+    assert result.data.entity_name == "Operation True Promise II"
+    assert len(result.data.extractions) == 1
+    assert result.data.extractions[0].value == "2024-10-01"
+
+
+@pytest.mark.asyncio
+async def test_empty_result_and_missing_structured_output_is_parse_failed():
+    """The empty-result-no-structured-output case — the exact failure we saw
+    on testdrive-cli-1 before the structured_output parser landed. The
+    runner should surface it as parse_failed, not silently pass an empty
+    string downstream."""
+    empty_envelope = json.dumps(
+        {
+            "type": "result",
+            "result": "",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+            "is_error": False,
+        }
+    ).encode()
+
+    async def fake_exec(*argv, **kwargs):
+        return _fake_process(stdout=empty_envelope)
+
+    runner = ClaudeCodeRunner(model="sonnet")
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+        result = await runner.execute(prompt="p", schema=SCHEMA, timeout_s=30)
+
+    # After one retry (also empty), it stays parse_failed.
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.startswith("parse_failed")
 
 
 @pytest.mark.asyncio

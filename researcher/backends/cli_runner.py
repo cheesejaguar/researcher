@@ -260,10 +260,25 @@ class ClaudeCodeRunner:
             )
 
         # Parse the Claude Code JSON envelope.
+        #
+        # Format evolution: claude CLI v2.1+ with --json-schema writes the
+        # validated structured response to a new ``structured_output`` key
+        # and leaves ``result`` as an empty string. Older versions (and
+        # calls without --json-schema) return the content stringified in
+        # ``result``. We prefer structured_output, fall back to result.
         try:
             envelope = json.loads(stdout.decode("utf-8", errors="replace"))
-            inner_str = envelope.get("result", "")
-            inner = json.loads(inner_str) if isinstance(inner_str, str) else inner_str
+            inner: Any = envelope.get("structured_output")
+            if inner is None or inner == "":
+                inner_str = envelope.get("result", "")
+                if not inner_str:
+                    raise ValueError(
+                        "claude returned empty result and no structured_output — "
+                        "likely an internal error or unsupported flag combination"
+                    )
+                inner = (
+                    json.loads(inner_str) if isinstance(inner_str, str) else inner_str
+                )
             data = SubagentResponse.model_validate(inner)
             return CliResult(
                 ok=True,
@@ -272,7 +287,7 @@ class ClaudeCodeRunner:
                 exit_code=proc.returncode,
                 raw_usage=envelope.get("usage"),
             )
-        except (json.JSONDecodeError, ValidationError, KeyError) as e:
+        except (json.JSONDecodeError, ValidationError, KeyError, ValueError) as e:
             self._dump_post_mortem(stdout, stricter=stricter)
             return CliResult(
                 ok=False,
