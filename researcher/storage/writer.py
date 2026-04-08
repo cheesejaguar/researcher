@@ -128,6 +128,16 @@ class FactWriter:
         if self._task is not None:
             await asyncio.wait_for(self._task, timeout=timeout_s)
 
+    async def quiesce(self, timeout_s: float = 30.0) -> None:
+        """Wait for all currently-queued claims to be processed.
+
+        Unlike `drain()`, this does NOT stop the writer task — the drain loop
+        stays running and can accept more claims afterward. Used by the
+        orchestrator to enforce a per-cycle barrier between map and the next
+        cycle's plan without tearing down the writer.
+        """
+        await asyncio.wait_for(self._queue.join(), timeout=timeout_s)
+
     def start(self) -> asyncio.Task:
         """Spawn the drain coroutine as a background task."""
         if self._task is not None:
