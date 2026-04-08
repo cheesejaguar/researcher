@@ -44,6 +44,9 @@ filterwarnings = [
     "error",
     "ignore::DeprecationWarning",
 ]
+markers = [
+    "manual: tests that invoke real external tools (claude, codex) — excluded from CI, run locally only",
+]
 
 [tool.ruff]
 line-length = 100
