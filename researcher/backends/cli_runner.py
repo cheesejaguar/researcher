@@ -24,6 +24,7 @@ from typing import Any, Optional, Protocol
 
 from pydantic import ValidationError
 
+from researcher.backends.disk_cache import DiskCache
 from researcher.backends.models import CliResult, SubagentResponse
 
 
@@ -84,11 +85,15 @@ class ClaudeCodeRunner:
         model: str = "sonnet",
         append_system_prompt: str = "",
         post_mortem_dir: Optional[Path] = None,
+        cache_dir: Optional[Path] = None,
     ) -> None:
         self._model = model
         self._append_system_prompt = append_system_prompt
         self._post_mortem_dir = post_mortem_dir
         self._cache: dict[str, CliResult] = {}
+        self._disk_cache: Optional[DiskCache] = None
+        if cache_dir is not None:
+            self._disk_cache = DiskCache(path=Path(cache_dir) / "claude_cache.json")
 
     async def execute(
         self,
@@ -99,8 +104,17 @@ class ClaudeCodeRunner:
     ) -> CliResult:
         argv = self._build_argv(schema=schema, tools=tools)
         key = _cache_key(argv, prompt, schema)
+
+        # L1: in-memory cache.
         if key in self._cache:
             return self._cache[key]
+
+        # L2: disk cache.
+        if self._disk_cache is not None:
+            cached = self._disk_cache.get(key)
+            if cached is not None:
+                self._cache[key] = cached
+                return cached
 
         result = await self._run_once(argv, prompt, timeout_s, stricter=False)
 
@@ -116,6 +130,8 @@ class ClaudeCodeRunner:
         # Only cache successful results — failures are transient and should be retried.
         if result.ok:
             self._cache[key] = result
+            if self._disk_cache is not None:
+                self._disk_cache.put(key, result)
         return result
 
     def _build_argv(self, *, schema: dict, tools: tuple[str, ...]) -> list[str]:
@@ -272,12 +288,16 @@ class CodexRunner:
         last_message_file: Optional[Path] = None,
         schema_file_dir: Optional[Path] = None,
         post_mortem_dir: Optional[Path] = None,
+        cache_dir: Optional[Path] = None,
     ) -> None:
         self._model = model
         self._last_message_file = last_message_file
         self._schema_file_dir = schema_file_dir or Path(tempfile.gettempdir())
         self._post_mortem_dir = post_mortem_dir
         self._cache: dict[str, CliResult] = {}
+        self._disk_cache: Optional[DiskCache] = None
+        if cache_dir is not None:
+            self._disk_cache = DiskCache(path=Path(cache_dir) / "codex_cache.json")
 
     async def execute(
         self,
@@ -322,14 +342,42 @@ class CodexRunner:
                 "--dangerously-bypass-approvals-and-sandbox",
             ]
 
-            key = _cache_key(argv, prompt, schema)
+            # Cache key must be stable across invocations: the tempfile paths
+            # (schema_path, last_message_path) are nondeterministic per-call,
+            # so we strip them and only hash the stable portions.
+            stable_argv = [
+                "codex",
+                "exec",
+                "--json",
+                "--output-schema",
+                "<schema>",
+                "--output-last-message",
+                "<last_message>",
+                "--sandbox",
+                "read-only",
+                "--skip-git-repo-check",
+                "-m",
+                self._model,
+                "--dangerously-bypass-approvals-and-sandbox",
+            ]
+            key = _cache_key(stable_argv, prompt, schema)
+
+            # L1: in-memory.
             if key in self._cache:
                 return self._cache[key]
 
+            # L2: disk.
+            if self._disk_cache is not None:
+                cached = self._disk_cache.get(key)
+                if cached is not None:
+                    self._cache[key] = cached
+                    return cached
+
             result = await self._run_once(argv, prompt, last_message_path, timeout_s)
-            # Only cache successful results — failures are transient and should be retried.
             if result.ok:
                 self._cache[key] = result
+                if self._disk_cache is not None:
+                    self._disk_cache.put(key, result)
             return result
         finally:
             try:
