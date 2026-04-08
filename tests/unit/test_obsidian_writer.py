@@ -493,3 +493,65 @@ async def test_rerun_overwrites_existing_file(tmp_path: Path):
     second_content = file_path.read_text()
     assert "start_year: 1914" in second_content
     assert "1939" not in second_content
+
+
+# ---------- Error paths (regression coverage) ----------
+
+from unittest.mock import patch
+
+
+@pytest.mark.asyncio
+async def test_write_failure_does_not_raise_from_flush(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        await writer.on_fact(_sample_claim(), run_id="run-1")
+
+        def bad_replace(src, dst):
+            raise OSError("simulated disk full")
+
+        with patch("os.replace", side_effect=bad_replace):
+            await writer.flush()  # must NOT raise
+
+        assert writer.stats["errors"] >= 1
+        assert writer.stats["writes"] == 0
+    finally:
+        await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_tempfile_cleaned_up_on_write_failure(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        await writer.on_fact(_sample_claim(), run_id="run-1")
+
+        def bad_replace(src, dst):
+            raise OSError("simulated failure")
+
+        with patch("os.replace", side_effect=bad_replace):
+            await writer.flush()
+
+        target_dir = tmp_path / "researcher" / "War"
+        if target_dir.exists():
+            tmps = list(target_dir.glob("*.tmp"))
+            assert tmps == [], f"leaked tempfiles: {tmps}"
+            hidden_tmps = list(target_dir.glob(".*.tmp"))
+            assert hidden_tmps == [], f"leaked hidden tempfiles: {hidden_tmps}"
+    finally:
+        await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_stats_counts_coalesced_claims(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        await writer.on_fact(_sample_claim(field_name="start_year"), run_id="run-1")
+        await writer.on_fact(
+            _sample_claim(field_name="start_year", value=1940, span="cli_1"),
+            run_id="run-1",
+        )
+        assert writer.stats["coalesced_claims"] == 1
+    finally:
+        await writer.stop()
