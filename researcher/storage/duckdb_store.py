@@ -78,6 +78,7 @@ class DuckDBKnowledgeStore(KnowledgeStore):
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
         self._lock = asyncio.Lock()
         self._opened = False
+        self._vss_enabled: bool = False
 
     # ---- lifecycle -------------------------------------------------------
 
@@ -86,6 +87,17 @@ class DuckDBKnowledgeStore(KnowledgeStore):
             return
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = duckdb.connect(str(self._db_path))
+        # Install + load the VSS extension for HNSW-based k-NN search.
+        # The HNSW index in vss requires an experimental flag for persistent
+        # databases (in-memory works without it). Both INSTALL and LOAD are
+        # idempotent so reopening an existing file is cheap.
+        try:
+            self._conn.execute("INSTALL vss")
+            self._conn.execute("LOAD vss")
+            self._conn.execute("SET hnsw_enable_experimental_persistence = true")
+            self._vss_enabled = True
+        except duckdb.Error:
+            self._vss_enabled = False
         self._init_tables()
         self._opened = True
 
@@ -126,10 +138,22 @@ class DuckDBKnowledgeStore(KnowledgeStore):
             """
             CREATE TABLE IF NOT EXISTS embeddings (
                 entity_id TEXT PRIMARY KEY,
-                vector_json TEXT NOT NULL
+                vector_json TEXT NOT NULL,
+                vector_array FLOAT[384]
             )
             """
         )
+        if self._vss_enabled:
+            try:
+                c.execute(
+                    "CREATE INDEX IF NOT EXISTS embeddings_hnsw "
+                    "ON embeddings USING HNSW (vector_array) "
+                    "WITH (metric = 'cosine')"
+                )
+            except duckdb.Error:
+                # HNSW index creation can fail on existing tables with
+                # duplicate keys; safe to swallow and fall back to linear scan.
+                pass
         c.execute(
             """
             CREATE TABLE IF NOT EXISTS provenance (
@@ -303,12 +327,26 @@ class DuckDBKnowledgeStore(KnowledgeStore):
         Sync because the resolver typically calls it from inside its own
         async pipeline already holding the event loop's attention; if you
         need a coroutine, ``asyncio.to_thread(store.set_vector, ...)`` works.
+
+        ``vec`` is padded with zeros (or truncated) to exactly 384 dims so
+        the parallel ``vector_array FLOAT[384]`` column stays consistent
+        with the HNSW index. The hash-based test embedder and the real
+        sentence-transformers MiniLM both produce 384-dim outputs already;
+        the pad path exists only for shorter test stubs.
         """
         conn = self._require_conn()
+        padded = list(vec)
+        if len(padded) < 384:
+            padded = padded + [0.0] * (384 - len(padded))
+        elif len(padded) > 384:
+            padded = padded[:384]
+        json_blob = json.dumps(padded)
+        # DELETE + INSERT for upsert (DuckDB has no INSERT OR REPLACE).
         conn.execute("DELETE FROM embeddings WHERE entity_id = ?", [entity_id])
         conn.execute(
-            "INSERT INTO embeddings VALUES (?, ?)",
-            [entity_id, json.dumps(list(vec))],
+            "INSERT INTO embeddings (entity_id, vector_json, vector_array) "
+            "VALUES (?, ?, ?)",
+            [entity_id, json_blob, padded],
         )
 
     async def find_similar(
@@ -316,6 +354,39 @@ class DuckDBKnowledgeStore(KnowledgeStore):
     ) -> list[tuple[str, float]]:
         async with self._lock:
             conn = self._require_conn()
+            # Pad/truncate the query vector to 384 so it's compatible with the
+            # FLOAT[384] index column. Real embedders (LocalEmbedder MiniLM,
+            # OpenAI text-embedding-3-small at 384-dim) already match.
+            query_vec = list(embedding)
+            if len(query_vec) < 384:
+                query_vec = query_vec + [0.0] * (384 - len(query_vec))
+            elif len(query_vec) > 384:
+                query_vec = query_vec[:384]
+
+            if self._vss_enabled:
+                # VSS array_cosine_distance returns 1 - cosine_similarity, so
+                # ASCENDING order is closest-first. We convert back to a
+                # similarity score (higher = better) before returning so the
+                # public contract matches the python-side fallback.
+                rows = conn.execute(
+                    """
+                    SELECT ent.id AS entity_id,
+                           array_cosine_distance(
+                               emb.vector_array,
+                               ?::FLOAT[384]
+                           ) AS distance
+                    FROM entities ent
+                    JOIN embeddings emb ON emb.entity_id = ent.id
+                    WHERE ent.entity_type = ?
+                      AND emb.vector_array IS NOT NULL
+                    ORDER BY distance ASC
+                    LIMIT ?
+                    """,
+                    [query_vec, entity_type, k],
+                ).fetchall()
+                return [(r[0], 1.0 - float(r[1])) for r in rows]
+
+            # Fallback: python-side cosine over the JSON-encoded vectors.
             rows = conn.execute(
                 """
                 SELECT e.entity_id, e.vector_json
@@ -329,7 +400,7 @@ class DuckDBKnowledgeStore(KnowledgeStore):
             scored: list[tuple[str, float]] = []
             for eid, vec_json in rows:
                 vec = json.loads(vec_json)
-                scored.append((eid, _cosine(embedding, vec)))
+                scored.append((eid, _cosine(query_vec, vec)))
             scored.sort(key=lambda p: p[1], reverse=True)
             return scored[:k]
 

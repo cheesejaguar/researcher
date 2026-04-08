@@ -210,3 +210,46 @@ async def test_async_context_manager(tmp_path: Path):
         assert eid
     # After the context exits, the file should still be there
     assert db_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_find_similar_uses_vss_when_available(tmp_path: Path):
+    """When the VSS extension is loaded, find_similar uses array_cosine_distance via SQL."""
+    store = DuckDBKnowledgeStore(db_path=tmp_path / "s.duckdb")
+    await store.open()
+    try:
+        await store.init_schema(WarEntity)
+        # Use 384-dim vectors so it matches the production HNSW shape.
+        a = await store.upsert_entity("War", "A", {"start_year": _cell(1)})
+        b = await store.upsert_entity("War", "B", {"start_year": _cell(2)})
+        c = await store.upsert_entity("War", "C", {"start_year": _cell(3)})
+        # 384-dim vectors: A and B are nearly identical, C is orthogonal-ish.
+        store.set_vector(a, [1.0] + [0.0] * 383)
+        store.set_vector(b, [0.99] + [0.01] + [0.0] * 382)
+        store.set_vector(c, [0.0, 1.0] + [0.0] * 382)
+
+        # The query vector matches A.
+        results = await store.find_similar("War", [1.0] + [0.0] * 383, k=3)
+        assert len(results) == 3
+        assert results[0][0] == a
+        assert results[1][0] == b
+        # Cosine similarity is in [0, 1] (or [-1, 1] for general); values descending.
+        assert results[0][1] >= results[1][1] >= results[2][1]
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_vss_extension_is_loaded(tmp_path: Path):
+    """The store should automatically install and load the vss extension on open()."""
+    store = DuckDBKnowledgeStore(db_path=tmp_path / "s.duckdb")
+    await store.open()
+    try:
+        # Query DuckDB for loaded extensions.
+        rows = await store.query(
+            "SELECT extension_name FROM duckdb_extensions() WHERE loaded = true"
+        )
+        loaded = {r["extension_name"] for r in rows}
+        assert "vss" in loaded
+    finally:
+        await store.close()

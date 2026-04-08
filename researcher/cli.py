@@ -84,6 +84,14 @@ def run(
         "--runs-dir",
         help="Directory where per-run artifacts (DuckDB, events.jsonl) are written.",
     ),
+    fast_startup: bool = typer.Option(
+        False,
+        "--fast-startup",
+        help=(
+            "Use the hash-based pseudo-embedder instead of LocalEmbedder "
+            "(skips the MiniLM cold-load; intended for tests/CI)."
+        ),
+    ),
 ) -> None:
     """Run a research job from a YAML spec against the CLI subagent backend."""
     if backend not in ("auto", "cli", "api"):
@@ -108,6 +116,7 @@ def run(
             backend=backend,
             obsidian_vault_override=obsidian_vault,
             offline=offline,
+            fast_startup=fast_startup,
         )
     )
     typer.echo(f"[researcher run] done reason={reason.value}")
@@ -120,6 +129,7 @@ async def _execute_run(
     backend: str,
     obsidian_vault_override: str,
     offline: bool,
+    fast_startup: bool = False,
 ) -> StopReason:
     """Construct every wire and execute :meth:`Orchestrator.run` once.
 
@@ -140,6 +150,7 @@ async def _execute_run(
         FactWrittenPayload,
     )
     from researcher.integrations.obsidian import ObsidianWriter
+    from researcher.llm.embedder import LocalEmbedder
     from researcher.orchestrator import Orchestrator
     from researcher.scheduler import Scheduler
     from researcher.spec import build_entity_class, load_spec
@@ -174,9 +185,16 @@ async def _execute_run(
         await bus.start()
 
         try:
+            # Wave 1.1: prefer the real LocalEmbedder (sentence-transformers
+            # MiniLM, 384-dim) over the hash-based placeholder. The
+            # ``--fast-startup`` flag (and ``offline``) keep the old behavior
+            # for tests/CI that can't pay the MiniLM cold-load cost.
+            embed_fn = (
+                _default_embed_fn if (fast_startup or offline) else LocalEmbedder()
+            )
             resolver = DefaultEntityResolver(
                 store=store,
-                embed_fn=_default_embed_fn,
+                embed_fn=embed_fn,
                 distinct_pairs=spec_obj.distinct_pairs,
             )
 
