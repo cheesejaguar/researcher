@@ -79,6 +79,7 @@ class DuckDBKnowledgeStore(KnowledgeStore):
         self._lock = asyncio.Lock()
         self._opened = False
         self._vss_enabled: bool = False
+        self._duckpgq_enabled: bool = False
 
     # ---- lifecycle -------------------------------------------------------
 
@@ -98,6 +99,14 @@ class DuckDBKnowledgeStore(KnowledgeStore):
             self._vss_enabled = True
         except duckdb.Error:
             self._vss_enabled = False
+        # Attempt to load the DuckPGQ community extension for SQL/PGQ graph
+        # queries. Not available on every platform; fall back gracefully.
+        try:
+            self._conn.execute("INSTALL duckpgq FROM community")
+            self._conn.execute("LOAD duckpgq")
+            self._duckpgq_enabled = True
+        except duckdb.Error:
+            self._duckpgq_enabled = False
         self._init_tables()
         self._opened = True
 
@@ -219,6 +228,43 @@ class DuckDBKnowledgeStore(KnowledgeStore):
             )
             """
         )
+        # Typed graph edges between entities. The (source_id, target_id,
+        # relation_label) composite key means multiple distinct labels between
+        # the same two entities coexist, but duplicate triples are deduped on
+        # record_relation() with a higher-confidence-wins policy.
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entity_relations (
+                source_id TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                relation_label TEXT NOT NULL,
+                confidence DOUBLE NOT NULL,
+                run_id TEXT NOT NULL,
+                valid_from TIMESTAMP,
+                valid_to TIMESTAMP,
+                PRIMARY KEY (source_id, target_id, relation_label)
+            )
+            """
+        )
+        # Declare (or refresh) the DuckPGQ property graph view so ``MATCH``
+        # clauses can traverse (entities)-[entity_relations]->(entities).
+        # Only attempted when the extension loaded; swallowed on failure so
+        # reopening an existing file stays idempotent.
+        if self._duckpgq_enabled:
+            try:
+                c.execute(
+                    """
+                    CREATE OR REPLACE PROPERTY GRAPH researcher_kg
+                    VERTEX TABLES (entities)
+                    EDGE TABLES (
+                        entity_relations
+                        SOURCE KEY (source_id) REFERENCES entities (id)
+                        DESTINATION KEY (target_id) REFERENCES entities (id)
+                    )
+                    """
+                )
+            except duckdb.Error:
+                pass
 
     def _require_conn(self) -> duckdb.DuckDBPyConnection:
         if self._conn is None:
@@ -439,6 +485,97 @@ class DuckDBKnowledgeStore(KnowledgeStore):
                 return {"status": "superseded"}
 
             return {"status": "conflict_kept_existing"}
+
+    # ---- graph edges -----------------------------------------------------
+
+    async def record_relation(
+        self,
+        source_id: str,
+        target_id: str,
+        relation_label: str,
+        confidence: float,
+        run_id: str,
+    ) -> None:
+        """Insert or upsert an entity_relations row.
+
+        On conflict (same source/target/label), keep the higher-confidence
+        value. The run_id + valid_from are overwritten along with the
+        confidence so downstream consumers can see which run promoted the
+        edge last.
+        """
+        async with self._lock:
+            conn = self._require_conn()
+            existing = conn.execute(
+                "SELECT confidence FROM entity_relations "
+                "WHERE source_id = ? AND target_id = ? AND relation_label = ?",
+                [source_id, target_id, relation_label],
+            ).fetchone()
+            now = _now()
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO entity_relations (
+                        source_id, target_id, relation_label, confidence,
+                        run_id, valid_from, valid_to
+                    ) VALUES (?, ?, ?, ?, ?, ?, NULL)
+                    """,
+                    [
+                        source_id,
+                        target_id,
+                        relation_label,
+                        float(confidence),
+                        run_id,
+                        now,
+                    ],
+                )
+            elif float(confidence) > float(existing[0]):
+                conn.execute(
+                    """
+                    UPDATE entity_relations
+                       SET confidence = ?, run_id = ?, valid_from = ?
+                     WHERE source_id = ? AND target_id = ? AND relation_label = ?
+                    """,
+                    [
+                        float(confidence),
+                        run_id,
+                        now,
+                        source_id,
+                        target_id,
+                        relation_label,
+                    ],
+                )
+
+    async def find_neighbors(
+        self, entity_id: str, relation_label: str | None = None
+    ) -> list[dict]:
+        """Return outbound neighbors of an entity.
+
+        Optionally filtered by ``relation_label``. Returns a list of dicts
+        with ``target_id``, ``relation_label``, and ``confidence`` keys.
+        """
+        async with self._lock:
+            conn = self._require_conn()
+            if relation_label:
+                rows = conn.execute(
+                    "SELECT target_id, relation_label, confidence "
+                    "FROM entity_relations "
+                    "WHERE source_id = ? AND relation_label = ?",
+                    [entity_id, relation_label],
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT target_id, relation_label, confidence "
+                    "FROM entity_relations WHERE source_id = ?",
+                    [entity_id],
+                ).fetchall()
+            return [
+                {
+                    "target_id": r[0],
+                    "relation_label": r[1],
+                    "confidence": float(r[2]),
+                }
+                for r in rows
+            ]
 
     # ---- generic query ---------------------------------------------------
 

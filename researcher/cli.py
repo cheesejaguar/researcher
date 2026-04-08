@@ -7,6 +7,7 @@ subagent backend. The remaining subcommands (`watch`, `inspect`, `resume`,
 
 from __future__ import annotations
 
+import json
 from datetime import UTC
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -391,6 +392,40 @@ def stop(
     """Send a graceful stop signal to a running orchestrator."""
     typer.echo(f"[researcher stop] run_id={run_id}")
     typer.echo("Wave 0 skeleton: stop protocol lands in Wave 1-E.")
+
+
+@app.command()
+def graph(
+    run_id: str = typer.Argument(..., help="Run id to query."),
+    runs_dir: Path = typer.Option(
+        Path("runs"), "--runs-dir", help="Directory where run artifacts live."
+    ),
+    sql: str = typer.Option(
+        "SELECT source_id, target_id, relation_label, confidence FROM entity_relations LIMIT 50",
+        "--sql",
+        help="SQL query to run against the run's DuckDB store.",
+    ),
+) -> None:
+    """Run an ad-hoc SQL query against a completed run's entity_relations table."""
+    import asyncio as _asyncio
+
+    db_path = runs_dir / run_id / "store.duckdb"
+    if not db_path.exists():
+        raise typer.BadParameter(f"no store found at {db_path}")
+
+    async def _run() -> None:
+        from researcher.storage.duckdb_store import DuckDBKnowledgeStore
+
+        store = DuckDBKnowledgeStore(db_path=db_path)
+        await store.open()
+        try:
+            rows = await store.query(sql)
+            for r in rows:
+                typer.echo(json.dumps(r, default=str))
+        finally:
+            await store.close()
+
+    _asyncio.run(_run())
 
 
 @app.command()

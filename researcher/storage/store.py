@@ -122,3 +122,18 @@ class KnowledgeStore(ABC):
         gracefully when a stub store is used in higher-layer tests.
         """
         return {"status": "not_supported"}
+
+    async def record_relation(
+        self,
+        source_id: str,
+        target_id: str,
+        relation_label: str,
+        confidence: float,
+        run_id: str,
+    ) -> None:
+        """Record a typed edge between two entities.
+
+        Default: no-op. The DuckDB store overrides this with a real
+        ``entity_relations`` upsert (higher-confidence wins on conflict).
+        """
+        return None

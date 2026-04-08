@@ -57,6 +57,15 @@ class EntitySpec(BaseModel):
     search_templates: list[str] = Field(default_factory=list)
 
 
+class RelationSpec(BaseModel):
+    """Declare a relation type that agents should look for between entities."""
+
+    name: str  # e.g., "ally_of", "took_place_in"
+    source_type: str
+    target_type: str
+    description: str = ""
+
+
 class SearchConfig(BaseModel):
     provider: str = "tavily"  # tavily | brave | serper | file_seeds
     api_key_env: str = "TAVILY_API_KEY"
@@ -84,6 +93,9 @@ class RunSpec(BaseModel):
     # Obsidian integration — when set, a secondary ObsidianWriter sink
     # materializes FactClaims into Markdown files in this vault.
     obsidian_vault: Optional[str] = None
+    # Declared relation types the agents should look for between entities.
+    # Populated from the YAML spec; empty list means "no graph extraction".
+    relations: list[RelationSpec] = Field(default_factory=list)
     # Cross-run accumulation policy:
     #   "overwrite" — each run resets entity state (legacy behavior).
     #   "merge"     — fields accumulate across runs with conflict-aware
