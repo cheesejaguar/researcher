@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from researcher.budget import Budget, BudgetExceededError
 from researcher.events import (
@@ -67,6 +67,7 @@ class Orchestrator:
         budget: Budget,
         run_id: str,
         max_parallel_agents: int = 6,
+        obsidian_writer: Any = None,  # Optional[ObsidianWriter]; avoid import cycle
     ) -> None:
         self._spec = spec
         self._store = store
@@ -83,6 +84,7 @@ class Orchestrator:
         self._cli_runner_factory: Optional[Callable[[CliKind], CliRunner]] = None
         self._cycle_subagent_failures: int = 0
         self._circuit_break_threshold: int = 3
+        self._obsidian_writer = obsidian_writer
 
     def set_backend_resolver(self, resolver: BackendResolver) -> None:
         self._backend_resolver = resolver
@@ -126,6 +128,9 @@ class Orchestrator:
         # Start the writer drain loop for the whole run.
         self._writer.start()
 
+        if self._obsidian_writer is not None:
+            await self._obsidian_writer.start()
+
         reason: StopReason = StopReason.NO_TASKS
         try:
             while self._cycle < self._spec.max_cycles:
@@ -156,6 +161,15 @@ class Orchestrator:
                             await self._writer.submit(claim)
                         except asyncio.QueueFull:
                             pass  # drops counted in writer.metrics
+                        # Secondary sink — Obsidian. Never let failures here
+                        # disrupt the primary path.
+                        if self._obsidian_writer is not None:
+                            try:
+                                await self._obsidian_writer.on_fact(
+                                    claim, run_id=self._run_id
+                                )
+                            except Exception:
+                                pass
                     # Record failures for circuit-break counter + detect subagent_cap.
                     if r.state == AgentState.FAILED and r.error:
                         if r.error == "subagent_cap":
@@ -170,6 +184,12 @@ class Orchestrator:
 
                 # Serial reduce: wait for this cycle's claims to process.
                 await self._writer.quiesce()
+
+                if self._obsidian_writer is not None:
+                    try:
+                        await self._obsidian_writer.flush()
+                    except Exception:
+                        pass
 
                 metrics = await self._store.snapshot_metrics()
                 await self._scheduler.update_from_metrics(metrics)
@@ -203,6 +223,11 @@ class Orchestrator:
                 await self._writer.drain()
             except Exception:
                 pass
+            if self._obsidian_writer is not None:
+                try:
+                    await self._obsidian_writer.stop()
+                except Exception:
+                    pass
             await self._graceful_stop(reason)
 
         return reason
