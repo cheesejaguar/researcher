@@ -28,7 +28,14 @@ from researcher.backends.disk_cache import DiskCache
 from researcher.backends.models import CliResult, SubagentResponse
 
 # Patterns that indicate auth or usage-limit errors in CLI stderr.
-_AUTH_PATTERNS = ("please run: claude auth", "not signed in", "please log in", "codex login")
+_AUTH_PATTERNS = (
+    "please run: claude auth",
+    "not signed in",
+    "not logged in",  # claude v2.1+ --bare mode without ANTHROPIC_API_KEY
+    "please run /login",
+    "please log in",
+    "codex login",
+)
 _USAGE_LIMIT_PATTERNS = ("rate_limit", "usage_limit", "quota", "monthly limit")
 
 
@@ -85,6 +92,7 @@ class ClaudeCodeRunner:
         append_system_prompt: str = "",
         post_mortem_dir: Optional[Path] = None,
         cache_dir: Optional[Path] = None,
+        bare: Optional[bool] = None,
     ) -> None:
         self._model = model
         self._append_system_prompt = append_system_prompt
@@ -93,6 +101,14 @@ class ClaudeCodeRunner:
         self._disk_cache: Optional[DiskCache] = None
         if cache_dir is not None:
             self._disk_cache = DiskCache(path=Path(cache_dir) / "claude_cache.json")
+        # `--bare` disables OAuth/keychain reads and requires ANTHROPIC_API_KEY.
+        # Default to ON to preserve existing behavior; opt out when the user
+        # is authenticated via `claude login` (OAuth) and has no API key set.
+        # Env var RESEARCHER_CLAUDE_BARE=0 forces non-bare mode from the shell.
+        if bare is None:
+            env_val = os.environ.get("RESEARCHER_CLAUDE_BARE", "1").strip().lower()
+            bare = env_val not in ("0", "false", "no", "")
+        self._bare = bare
 
     async def execute(
         self,
@@ -142,13 +158,18 @@ class ClaudeCodeRunner:
             "json",
             "--json-schema",
             json.dumps(schema),
-            "--bare",
-            "--model",
-            self._model,
-            "--allowedTools",
-            *tools,
-            "--dangerously-skip-permissions",
         ]
+        if self._bare:
+            argv.append("--bare")
+        argv.extend(
+            [
+                "--model",
+                self._model,
+                "--allowedTools",
+                *tools,
+                "--dangerously-skip-permissions",
+            ]
+        )
         if self._append_system_prompt:
             argv.extend(["--append-system-prompt", self._append_system_prompt])
         return argv

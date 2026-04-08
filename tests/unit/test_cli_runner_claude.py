@@ -178,6 +178,87 @@ async def test_auth_required_pattern_match():
 
 
 @pytest.mark.asyncio
+async def test_not_logged_in_pattern_match():
+    """Claude v2.1+ --bare mode w/o ANTHROPIC_API_KEY emits 'Not logged in'."""
+    async def fake_exec(*argv, **kwargs):
+        return _fake_process(
+            stdout=b"",
+            stderr=b"Error: Not logged in . Please run /login\n",
+            returncode=1,
+        )
+
+    runner = ClaudeCodeRunner(model="sonnet")
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+        result = await runner.execute(prompt="p", schema=SCHEMA, timeout_s=30)
+
+    assert not result.ok
+    assert result.error == "auth_required"
+
+
+@pytest.mark.asyncio
+async def test_bare_flag_opt_out_via_constructor():
+    """Passing bare=False strips --bare from argv so OAuth login works."""
+    valid = _claude_envelope(
+        json.dumps({"entity_name": "X", "extractions": [], "diagnostics": ""})
+    )
+    captured_argv: list = []
+
+    async def fake_exec(*argv, **kwargs):
+        captured_argv.extend(argv)
+        return _fake_process(stdout=valid)
+
+    runner = ClaudeCodeRunner(model="sonnet", bare=False)
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+        await runner.execute(prompt="hi", schema=SCHEMA, timeout_s=30)
+
+    assert "--bare" not in captured_argv
+    # All other flags still present.
+    assert "--print" in captured_argv
+    assert "--model" in captured_argv
+    assert "--dangerously-skip-permissions" in captured_argv
+
+
+@pytest.mark.asyncio
+async def test_bare_flag_opt_out_via_env_var(monkeypatch):
+    """RESEARCHER_CLAUDE_BARE=0 disables --bare even without constructor arg."""
+    valid = _claude_envelope(
+        json.dumps({"entity_name": "X", "extractions": [], "diagnostics": ""})
+    )
+    captured_argv: list = []
+
+    async def fake_exec(*argv, **kwargs):
+        captured_argv.extend(argv)
+        return _fake_process(stdout=valid)
+
+    monkeypatch.setenv("RESEARCHER_CLAUDE_BARE", "0")
+    runner = ClaudeCodeRunner(model="sonnet")  # no explicit bare= arg
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+        await runner.execute(prompt="hi", schema=SCHEMA, timeout_s=30)
+
+    assert "--bare" not in captured_argv
+
+
+@pytest.mark.asyncio
+async def test_bare_flag_default_is_on(monkeypatch):
+    """Without env var or constructor arg, --bare stays on for backwards compat."""
+    valid = _claude_envelope(
+        json.dumps({"entity_name": "X", "extractions": [], "diagnostics": ""})
+    )
+    captured_argv: list = []
+
+    async def fake_exec(*argv, **kwargs):
+        captured_argv.extend(argv)
+        return _fake_process(stdout=valid)
+
+    monkeypatch.delenv("RESEARCHER_CLAUDE_BARE", raising=False)
+    runner = ClaudeCodeRunner(model="sonnet")
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+        await runner.execute(prompt="hi", schema=SCHEMA, timeout_s=30)
+
+    assert "--bare" in captured_argv
+
+
+@pytest.mark.asyncio
 async def test_usage_limit_pattern_match():
     async def fake_exec(*argv, **kwargs):
         return _fake_process(
