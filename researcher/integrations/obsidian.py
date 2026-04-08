@@ -274,6 +274,48 @@ class ObsidianWriter:
         """Placeholder — real implementation in Task 6."""
         return
 
+    async def on_fact(self, claim: FactClaim, run_id: str) -> None:
+        """Coalesce a claim into the pending buffer and mark the entity dirty.
+
+        Never raises OSError — all disk I/O happens in the flush path. May
+        raise RuntimeError if called after stop(), which is misuse.
+        """
+        if self._stopped:
+            raise RuntimeError("ObsidianWriter is stopped")
+
+        key = (claim.entity_type, claim.entity_name)
+        async with self._lock:
+            state = self._pending.get(key)
+            if state is None:
+                state = EntityState(
+                    entity_type=claim.entity_type,
+                    entity_name=claim.entity_name,
+                )
+                self._pending[key] = state
+
+            state.run_ids.add(run_id)
+            state.updated_at = datetime.now(timezone.utc)
+
+            existing = state.fields.get(claim.field)
+            if existing is None:
+                state.fields[claim.field] = FieldValue(
+                    value=claim.value,
+                    confidence=claim.confidence,
+                    provenances=[claim.provenance],
+                )
+            else:
+                self._stats["coalesced_claims"] += 1
+                # Higher-confidence value wins; always append provenance (deduped).
+                if claim.confidence > existing.confidence:
+                    existing.value = claim.value
+                    existing.confidence = claim.confidence
+                # Dedup by (url, span_id) tuple.
+                seen = {(p.url, p.span_id) for p in existing.provenances}
+                if (claim.provenance.url, claim.provenance.span_id) not in seen:
+                    existing.provenances.append(claim.provenance)
+
+            self._dirty.add(key)
+
     async def _debounce_loop(self) -> None:
         """Placeholder — real implementation in Task 6."""
         while not self._stopped:

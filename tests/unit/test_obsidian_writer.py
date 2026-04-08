@@ -210,3 +210,157 @@ async def test_stats_initially_zero(tmp_path: Path):
         "errors": 0,
         "sanitized_names": 0,
     }
+
+
+# ---------- on_fact + coalescing ----------
+
+from datetime import timedelta
+from typing import Any as _Any
+
+from researcher.models import FactClaim
+
+
+def _sample_claim(
+    field_name: str = "start_year",
+    value: _Any = 1939,
+    confidence: float = 0.9,
+    url: str = "https://example.com/wwii",
+    span: str = "cli_0",
+    entity_type: str = "War",
+    entity_name: str = "World War II",
+) -> FactClaim:
+    return FactClaim(
+        entity_type=entity_type,
+        entity_name=entity_name,
+        field=field_name,
+        value=value,
+        confidence=confidence,
+        provenance=Provenance(
+            url=url,
+            fetched_at=datetime.now(timezone.utc),
+            snippet=f"{field_name}={value}",
+            extractor_model="claude_code/unknown",
+            agent_id="sub-1",
+            task_id="t-1",
+            span_id=span,
+        ),
+        emitted_by="sub-1",
+        task_id="t-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_on_fact_coalesces_into_pending_buffer(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        await writer.on_fact(_sample_claim(), run_id="run-1")
+        assert len(writer._pending) == 1
+        key = ("War", "World War II")
+        assert key in writer._pending
+        state = writer._pending[key]
+        assert "start_year" in state.fields
+        assert state.fields["start_year"].value == 1939
+        assert "run-1" in state.run_ids
+    finally:
+        await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_on_fact_merges_multiple_fields_for_same_entity(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        await writer.on_fact(
+            _sample_claim(field_name="start_year", value=1939, span="cli_0"),
+            run_id="run-1",
+        )
+        await writer.on_fact(
+            _sample_claim(field_name="end_year", value=1945, span="cli_1"),
+            run_id="run-1",
+        )
+        await writer.on_fact(
+            _sample_claim(field_name="belligerents", value=["Allies", "Axis"], span="cli_2"),
+            run_id="run-1",
+        )
+        assert len(writer._pending) == 1
+        state = list(writer._pending.values())[0]
+        assert set(state.fields.keys()) == {"start_year", "end_year", "belligerents"}
+    finally:
+        await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_on_fact_higher_confidence_wins(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        await writer.on_fact(
+            _sample_claim(value=1939, confidence=0.8, span="cli_0"), run_id="run-1"
+        )
+        await writer.on_fact(
+            _sample_claim(value=1940, confidence=0.95, span="cli_1"), run_id="run-1"
+        )
+        state = writer._pending[("War", "World War II")]
+        fv = state.fields["start_year"]
+        assert fv.value == 1940
+        assert fv.confidence == 0.95
+        assert len(fv.provenances) == 2
+    finally:
+        await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_on_fact_dedupes_provenance_by_url_and_span(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        await writer.on_fact(
+            _sample_claim(url="https://a.com", span="cli_0"), run_id="run-1"
+        )
+        await writer.on_fact(
+            _sample_claim(url="https://a.com", span="cli_0"), run_id="run-1"
+        )
+        fv = writer._pending[("War", "World War II")].fields["start_year"]
+        assert len(fv.provenances) == 1
+        await writer.on_fact(
+            _sample_claim(url="https://a.com", span="cli_1"), run_id="run-1"
+        )
+        assert len(fv.provenances) == 2
+    finally:
+        await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_on_fact_separates_entity_types(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        await writer.on_fact(_sample_claim(entity_type="War"), run_id="run-1")
+        await writer.on_fact(
+            _sample_claim(entity_type="Trial", entity_name="NCT12345"), run_id="run-1"
+        )
+        assert ("War", "World War II") in writer._pending
+        assert ("Trial", "NCT12345") in writer._pending
+    finally:
+        await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_on_fact_after_stop_raises(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    await writer.stop()
+    with pytest.raises(RuntimeError, match="stopped"):
+        await writer.on_fact(_sample_claim(), run_id="run-1")
+
+
+@pytest.mark.asyncio
+async def test_on_fact_marks_entity_dirty(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        await writer.on_fact(_sample_claim(), run_id="run-1")
+        assert ("War", "World War II") in writer._dirty
+    finally:
+        await writer.stop()
