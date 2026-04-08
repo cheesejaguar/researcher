@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Optional, Protocol
@@ -254,3 +256,175 @@ class ClaudeCodeRunner:
             path.write_bytes(stdout)
         except OSError:
             pass
+
+
+class CodexRunner:
+    """Runs `codex exec --json --output-schema <file> --output-last-message <file>`.
+
+    Unlike Claude Code, Codex streams JSONL events on stdout and writes the
+    final assistant message to `--output-last-message <file>`. We point that
+    at a file we control, then read it back after the process exits.
+    """
+
+    def __init__(
+        self,
+        model: str = "o4-mini",
+        last_message_file: Optional[Path] = None,
+        schema_file_dir: Optional[Path] = None,
+        post_mortem_dir: Optional[Path] = None,
+    ) -> None:
+        self._model = model
+        self._last_message_file = last_message_file
+        self._schema_file_dir = schema_file_dir or Path(tempfile.gettempdir())
+        self._post_mortem_dir = post_mortem_dir
+        self._cache: dict[str, CliResult] = {}
+
+    async def execute(
+        self,
+        prompt: str,
+        schema: dict,
+        timeout_s: float,
+        tools: tuple[str, ...] = ("WebSearch", "WebFetch"),  # Codex has browsing by default
+    ) -> CliResult:
+        # Write schema to a temp file.
+        fd, schema_path = tempfile.mkstemp(
+            prefix="researcher_schema_",
+            suffix=".json",
+            dir=str(self._schema_file_dir),
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(schema, fh)
+
+            # Last-message file: use the injected one for tests, or a fresh temp file.
+            if self._last_message_file is not None:
+                last_message_path = self._last_message_file
+            else:
+                lm_fd, lm_path = tempfile.mkstemp(
+                    prefix="researcher_lastmsg_", suffix=".txt"
+                )
+                os.close(lm_fd)
+                last_message_path = Path(lm_path)
+
+            argv = [
+                "codex",
+                "exec",
+                "--json",
+                "--output-schema",
+                schema_path,
+                "--output-last-message",
+                str(last_message_path),
+                "--sandbox",
+                "read-only",
+                "--skip-git-repo-check",
+                "-m",
+                self._model,
+                "--dangerously-bypass-approvals-and-sandbox",
+            ]
+
+            key = _cache_key(argv, prompt, schema)
+            if key in self._cache:
+                return self._cache[key]
+
+            result = await self._run_once(argv, prompt, last_message_path, timeout_s)
+            # Only cache successful results — failures are transient and should be retried.
+            if result.ok:
+                self._cache[key] = result
+            return result
+        finally:
+            try:
+                os.unlink(schema_path)
+            except OSError:
+                pass
+
+    async def _run_once(
+        self, argv: list[str], prompt: str, last_message_path: Path, timeout_s: float
+    ) -> CliResult:
+        start = time.monotonic()
+        proc: Any = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except (FileNotFoundError, PermissionError) as e:
+            return CliResult(
+                ok=False,
+                error=f"spawn_failed: {e}",
+                wall_ms=int((time.monotonic() - start) * 1000),
+                exit_code=None,
+            )
+
+        try:
+            if proc.stdin is not None:
+                proc.stdin.write(prompt.encode("utf-8"))
+                if hasattr(proc.stdin, "drain"):
+                    drain_result = proc.stdin.drain()
+                    if asyncio.iscoroutine(drain_result):
+                        await drain_result
+                proc.stdin.close()
+
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=timeout_s
+                )
+            except asyncio.TimeoutError:
+                await _kill_and_reap(proc)
+                return CliResult(
+                    ok=False,
+                    error="timeout",
+                    wall_ms=int((time.monotonic() - start) * 1000),
+                    exit_code=None,
+                )
+            except asyncio.CancelledError:
+                await _kill_and_reap(proc)
+                raise
+        except asyncio.CancelledError:
+            await _kill_and_reap(proc)
+            raise
+
+        wall_ms = int((time.monotonic() - start) * 1000)
+        stderr_str = stderr.decode("utf-8", errors="replace") if stderr else ""
+
+        if _match_any(stderr_str, _AUTH_PATTERNS):
+            return CliResult(
+                ok=False, error="auth_required", wall_ms=wall_ms, exit_code=proc.returncode
+            )
+        if _match_any(stderr_str, _USAGE_LIMIT_PATTERNS):
+            return CliResult(
+                ok=False,
+                error="usage_limit_reached",
+                wall_ms=wall_ms,
+                exit_code=proc.returncode,
+            )
+
+        if proc.returncode != 0:
+            tail = stderr_str.strip().splitlines()[-5:] if stderr_str.strip() else [""]
+            tail_str = " | ".join(tail)[:2048]
+            return CliResult(
+                ok=False,
+                error=f"exit {proc.returncode}: {tail_str}",
+                wall_ms=wall_ms,
+                exit_code=proc.returncode,
+            )
+
+        # Read the last-message file rather than stdout (which is JSONL events).
+        try:
+            raw = last_message_path.read_text(encoding="utf-8")
+            inner = json.loads(raw)
+            data = SubagentResponse.model_validate(inner)
+            return CliResult(
+                ok=True,
+                data=data,
+                wall_ms=wall_ms,
+                exit_code=proc.returncode,
+            )
+        except (OSError, json.JSONDecodeError, ValidationError) as e:
+            return CliResult(
+                ok=False,
+                error=f"parse_failed: {e}",
+                wall_ms=wall_ms,
+                exit_code=proc.returncode,
+            )
