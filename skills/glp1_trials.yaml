@@ -1,0 +1,20 @@
+domain: glp1_trials
+skills:
+  - name: clinicaltrials_gov_nct_id
+    description: |
+      Clinical trials on clinicaltrials.gov have stable NCT identifiers
+      of the form NCTXXXXXXXX. Extract the NCT id first — it's the most
+      reliable disambiguator.
+    prompt_fragment: |
+      For ClinicalTrial entities, extract the NCT id (NCTXXXXXXXX format)
+      from clinicaltrials.gov or the trial registry first. Use it as the
+      canonical entity identifier.
+
+  - name: phase_from_title
+    description: |
+      Trial names often embed the phase number (e.g., "STEP-1" is phase 3,
+      "SURPASS-2" is phase 3). When phase is explicit in the title, use it.
+    prompt_fragment: |
+      If the trial name contains a phase indicator (phase 1/2/3/4),
+      use that as the phase field even if the article body phrases it
+      differently.

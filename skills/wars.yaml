@@ -1,0 +1,21 @@
+domain: wars
+skills:
+  - name: wikipedia_infobox_first
+    description: |
+      When researching a war, the Wikipedia infobox typically contains
+      start/end year, belligerents, and casualty estimates in structured
+      form. Extract those fields from the infobox before reading the
+      article body.
+    prompt_fragment: |
+      For War entities, check the Wikipedia infobox first for
+      structured fields (start_year, end_year, belligerents,
+      estimated_deaths). The infobox is usually the most reliable source.
+
+  - name: prefer_decisive_outcomes
+    description: |
+      Outcome fields like "decisive_victory" / "stalemate" / "treaty"
+      are often subjective. Prefer the phrasing from the conclusion
+      section of a long-form source over the first-paragraph summary.
+    prompt_fragment: |
+      For War.outcome, prefer the phrasing from the conclusion / aftermath
+      section of a long-form source over the opening paragraph.

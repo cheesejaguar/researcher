@@ -98,6 +98,10 @@ class StubKnowledgeStore(KnowledgeStore):
         return [c for c in self._conflicts if c.status == status]
 
     async def record_conflict(self, conflict: Conflict) -> None:
+        # Upsert by conflict_id so the stub matches DuckDBKnowledgeStore semantics.
+        self._conflicts = [
+            c for c in self._conflicts if c.conflict_id != conflict.conflict_id
+        ]
         self._conflicts.append(conflict)
 
     async def snapshot_metrics(self) -> StoreMetrics:

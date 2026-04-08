@@ -33,9 +33,10 @@ from researcher.events import (
     RunComplete,
     RunCompletePayload,
 )
+from researcher.agents.native_deps import NativeAgentDeps
 from researcher.agents.subagent import SubagentResearcher
 from researcher.llm.client import LLMClient
-from researcher.models import AgentResult, AgentState, FactClaim, Task
+from researcher.models import AgentResult, AgentState, FactClaim, Task, TaskKind
 from researcher.scheduler import Scheduler
 from researcher.spec import RunSpec
 from researcher.storage.store import KnowledgeStore
@@ -85,6 +86,7 @@ class Orchestrator:
         self._cycle_subagent_failures: int = 0
         self._circuit_break_threshold: int = 3
         self._obsidian_writer = obsidian_writer
+        self._native_deps: Optional[NativeAgentDeps] = None
 
     def set_backend_resolver(self, resolver: BackendResolver) -> None:
         self._backend_resolver = resolver
@@ -93,6 +95,15 @@ class Orchestrator:
         self, factory: Callable[[CliKind], CliRunner]
     ) -> None:
         self._cli_runner_factory = factory
+
+    def set_native_deps(self, deps: NativeAgentDeps) -> None:
+        """Opt in to the native-agent path by providing shared deps.
+
+        Without this call, `_spawn_agent` still raises NotImplementedError
+        on the native branch — existing tests that never set deps keep their
+        old behavior, while new code can opt in explicitly.
+        """
+        self._native_deps = deps
 
     def _resolver_pick(self, task: Task) -> BackendChoice:
         if self._backend_resolver is None:
@@ -235,17 +246,15 @@ class Orchestrator:
     async def _spawn_agent(self, task: Task) -> AgentResult:
         """Dispatch a task to either the subagent path or the native path.
 
-        Wave 1-E wires only the subagent path; the native path raises
-        NotImplementedError until Wave 1-D lands.
+        Wave 1-D wires both paths. The native path is opt-in: the caller must
+        install shared deps via `set_native_deps()` before `run()`. Without
+        that, the native branch preserves the old NotImplementedError behavior
+        for backwards compatibility.
         """
         async with self._sem:
             choice = self._resolver_pick(task)
             if choice.kind is None:
-                raise NotImplementedError(
-                    "Native agent path is not yet implemented (Wave 1-D). "
-                    "Install `claude` or `codex` on PATH and retry, or set "
-                    "`backend_policy: cli` in the run spec."
-                )
+                return await self._spawn_native_agent(task)
             if self._cli_runner_factory is None:
                 raise RuntimeError(
                     "Orchestrator has a backend resolver but no CLI runner factory. "
@@ -278,6 +287,60 @@ class Orchestrator:
                 timeout_s=float(self._spec.subagent_timeout_s),
             )
             return await agent.run(task)
+
+    async def _spawn_native_agent(self, task: Task) -> AgentResult:
+        """Dispatch a task to the appropriate native Agent subclass by TaskKind."""
+        if self._native_deps is None:
+            raise NotImplementedError(
+                "Native agent path requires native_deps; call "
+                "Orchestrator.set_native_deps(NativeAgentDeps(...)) before run(). "
+                "Alternatively, set `backend_policy: cli` in the spec and install "
+                "a CLI subagent on PATH."
+            )
+
+        # Deferred imports to avoid pulling native deps until they're used.
+        from researcher.agents.critic import CriticAgent
+        from researcher.agents.discover import DiscoverAgent
+        from researcher.agents.enrich import EnrichAgent
+        from researcher.agents.expand import ExpandAgent
+        from researcher.agents.verify import VerifyAgent
+
+        entity_schema_dict = {"entity_type": "Entity", "fields": []}
+        if self._spec.entities:
+            primary = self._spec.entities[0]
+            entity_schema_dict = {
+                "entity_type": primary.name,
+                "fields": [
+                    {"name": f.name, "type": f.type, "required": f.required}
+                    for f in primary.fields
+                ],
+            }
+
+        common_kwargs = dict(
+            agent_id=f"native-{task.id[:8]}",
+            llm=self._llm,
+            store=self._store,
+            emit=self._bus.emit,
+            run_id=self._run_id,
+            deps=self._native_deps,
+            entity_schema=entity_schema_dict,
+        )
+
+        if task.kind == TaskKind.DISCOVER:
+            agent: SubagentResearcher | DiscoverAgent | ExpandAgent | VerifyAgent | EnrichAgent | CriticAgent = (
+                DiscoverAgent(**common_kwargs, goal=self._spec.goal)
+            )
+        elif task.kind == TaskKind.EXPAND:
+            agent = ExpandAgent(**common_kwargs, goal=self._spec.goal)
+        elif task.kind == TaskKind.VERIFY:
+            agent = VerifyAgent(**common_kwargs)
+        elif task.kind == TaskKind.ENRICH:
+            agent = EnrichAgent(**common_kwargs, goal=self._spec.goal)
+        else:
+            raise NotImplementedError(
+                f"unsupported TaskKind for native path: {task.kind}"
+            )
+        return await agent.run(task)
 
     async def _emit_cycle_start(self, pending: int) -> None:
         await self._bus.emit(
