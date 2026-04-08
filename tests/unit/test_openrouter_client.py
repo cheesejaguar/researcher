@@ -195,6 +195,74 @@ async def test_complete_structured_raises_without_retry():
     assert len(FakeCls.create_calls) == 1
 
 
+# ---------- markdown fence tolerance ----------
+
+
+def test_strip_json_fence_handles_json_labeled_fence():
+    from researcher.llm.openrouter import _strip_json_fence
+
+    text = '```json\n{"name": "widget", "count": 7}\n```'
+    out = _strip_json_fence(text)
+    assert out == '{"name": "widget", "count": 7}'
+    assert json.loads(out) == {"name": "widget", "count": 7}
+
+
+def test_strip_json_fence_handles_bare_fence():
+    from researcher.llm.openrouter import _strip_json_fence
+
+    text = '```\n{"x": 1}\n```'
+    assert _strip_json_fence(text) == '{"x": 1}'
+
+
+def test_strip_json_fence_leaves_unfenced_text_alone():
+    from researcher.llm.openrouter import _strip_json_fence
+
+    text = '{"already": "clean"}'
+    assert _strip_json_fence(text) == text
+
+
+def test_strip_json_fence_tolerates_trailing_whitespace():
+    from researcher.llm.openrouter import _strip_json_fence
+
+    text = '  ```json\n{"a": 1}\n```  \n'
+    assert _strip_json_fence(text) == '{"a": 1}'
+
+
+@pytest.mark.asyncio
+async def test_complete_structured_strips_markdown_fence():
+    """Anthropic models routinely wrap JSON in ```json ... ``` despite being
+    told not to. The client must tolerate that without a retry."""
+    fenced = _fake_openai_response('```json\n{"name": "widget", "count": 7}\n```')
+    FakeCls = _fake_openai_cls([fenced])
+    client = OpenRouterClient(api_key="sk-test", async_openai_cls=FakeCls)
+    out = await client.complete_structured(
+        [{"role": "user", "content": "q"}],
+        _SamplePayload,
+        LLMTier.FAST,
+        task_id="t1",
+    )
+    assert out.name == "widget"
+    assert out.count == 7
+    # Exactly one call — the fence strip means no retry was needed.
+    assert len(FakeCls.create_calls) == 1
+
+
+# ---------- pricing table ----------
+
+
+def test_pricing_table_includes_claude_4x_models():
+    from researcher.llm.openrouter import _PRICING, _estimate_cost
+
+    assert "anthropic/claude-haiku-4.5" in _PRICING
+    assert "anthropic/claude-sonnet-4.6" in _PRICING
+    assert "anthropic/claude-opus-4.6" in _PRICING
+    # Non-zero costs for a concrete call: 1000 in / 500 out on Haiku 4.5 (1/5).
+    cost = _estimate_cost("anthropic/claude-haiku-4.5", 1000, 500)
+    assert cost > 0.0
+    # Sonnet 4.6 ($3/$15) should cost strictly more than Haiku 4.5 ($1/$5).
+    assert _estimate_cost("anthropic/claude-sonnet-4.6", 1000, 500) > cost
+
+
 # ---------- prompt caching (cache_control) ----------
 
 

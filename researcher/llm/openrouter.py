@@ -32,18 +32,47 @@ T = TypeVar("T", bound=BaseModel)
 
 # Pricing table — USD per million input/output tokens, best-effort defaults.
 # OpenRouter passes through to provider; `default` is used for unknown models.
+# Note: OpenRouter uses dot-separated version strings ("claude-haiku-4.5"),
+# not hyphenated ones. Both conventions appear here for legacy compatibility.
 _PRICING: dict[str, tuple[float, float]] = {
     "default": (0.50, 1.50),
     "openrouter/hermes-3-8b": (0.10, 0.20),
     "openrouter/hermes-3-70b": (0.50, 1.20),
+    # Legacy hyphen-separated IDs (retained for existing test fixtures).
     "anthropic/claude-sonnet-4-6": (3.00, 15.00),
     "anthropic/claude-opus-4-6": (15.00, 75.00),
+    # Current OpenRouter dot-separated Claude 4.x IDs (verified via
+    # /v1/models API, April 2026).
+    "anthropic/claude-haiku-4.5": (1.00, 5.00),
+    "anthropic/claude-sonnet-4.6": (3.00, 15.00),
+    "anthropic/claude-opus-4.6": (5.00, 25.00),
+    "anthropic/claude-opus-4.6-fast": (30.00, 150.00),
 }
 
 
 def _estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
     pi, po = _PRICING.get(model, _PRICING["default"])
     return (tokens_in * pi + tokens_out * po) / 1_000_000
+
+
+def _strip_json_fence(text: str) -> str:
+    """Strip markdown code fences (```json ... ``` or ``` ... ```) from an LLM
+    response. Anthropic models routinely wrap JSON in fences even when told
+    not to. Returns the inner content, stripped, or the original text if no
+    fence is detected.
+    """
+    s = text.strip()
+    if not s.startswith("```"):
+        return s
+    # Drop the opening fence line (either ``` or ```json).
+    nl = s.find("\n")
+    if nl == -1:
+        return s
+    inner = s[nl + 1 :]
+    # Drop trailing fence.
+    if inner.rstrip().endswith("```"):
+        inner = inner.rstrip()[:-3]
+    return inner.strip()
 
 
 class OpenRouterClient(LLMClient):
@@ -230,7 +259,7 @@ class OpenRouterClient(LLMClient):
             augmented, tier, task_id, temperature=temperature
         )
         try:
-            data = json.loads(response.text)
+            data = json.loads(_strip_json_fence(response.text))
             return schema.model_validate(data)
         except (json.JSONDecodeError, ValidationError):
             if not schema_retry:
@@ -243,14 +272,14 @@ class OpenRouterClient(LLMClient):
                     "content": (
                         "Your previous response could not be parsed. "
                         "Return ONLY a single JSON object matching the schema. "
-                        "No prose, no markdown."
+                        "No prose, no markdown, no code fences."
                     ),
                 }
             )
             retry_response = await self.complete(
                 stricter, tier, task_id, temperature=temperature
             )
-            data = json.loads(retry_response.text)
+            data = json.loads(_strip_json_fence(retry_response.text))
             return schema.model_validate(data)
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
