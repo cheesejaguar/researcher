@@ -1,0 +1,50 @@
+spec_id: wars
+goal: "Major interstate wars since 1500"
+backend_policy: auto
+max_cycles: 5
+max_entities_per_cycle: 200
+budget_usd: 3.00
+wall_limit_s: 600
+max_subagent_calls: 200
+subagent_timeout_s: 180
+
+entities:
+  - name: War
+    fields:
+      - { name: name,            type: str,       required: true }
+      - { name: start_year,      type: int,       required: true }
+      - { name: end_year,        type: int }
+      - { name: belligerents,    type: "list[str]" }
+      - { name: theater,         type: str }
+      - { name: estimated_deaths, type: int }
+      - { name: outcome,         type: str }
+      - { name: primary_causes,  type: "list[str]" }
+      - { name: wikipedia_url,   type: str }
+    search_templates:
+      - "{q} war wikipedia"
+      - "history of {q}"
+      - "{q} casualties"
+
+seeds:
+  - "major interstate wars since 1500"
+  - "20th century wars"
+  - "European wars 1500-1900"
+  - "Asian wars 20th century"
+  - "Middle East wars modern"
+
+# Known-distinct pairs that must never merge despite high lexical/semantic overlap.
+distinct_pairs:
+  - ["Napoleonic Wars", "War of the Sixth Coalition"]
+  - ["World War I", "Russo-Japanese War"]
+  - ["First Battle of the Marne", "Second Battle of the Marne"]
+  - ["Korean War", "Vietnam War"]
+
+search:
+  provider: tavily
+  api_key_env: TAVILY_API_KEY
+  max_results: 10
+
+models:
+  fast: openrouter/hermes-3-8b
+  smart: openrouter/hermes-3-70b
+  heavy: anthropic/claude-sonnet-4-6
