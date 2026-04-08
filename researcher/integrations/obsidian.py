@@ -78,3 +78,119 @@ def _safe_filename(name: str) -> str:
         digest = hashlib.sha1(original.encode("utf-8")).hexdigest()[:7]
         cleaned = cleaned[: _MAX_FILENAME_LEN - 9] + "_" + digest
     return cleaned
+
+
+def _yaml_scalar(value: Any) -> str:
+    """Serialize a scalar for YAML frontmatter (strings, ints, floats, bools)."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if value is None:
+        return "null"
+    # Strings: only quote if they contain YAML special characters.
+    s = str(value)
+    if any(c in s for c in ':#&*!|>\'"%@`') or s.strip() != s:
+        escaped = s.replace('"', '\\"')
+        return f'"{escaped}"'
+    return s
+
+
+def _yaml_field(name: str, value: Any, indent: int = 0) -> str:
+    """Render one frontmatter line for a field (scalar) or list."""
+    pad = " " * indent
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return f"{pad}{name}: []"
+        lines = [f"{pad}{name}:"]
+        for item in value:
+            lines.append(f"{pad}  - {_yaml_scalar(item)}")
+        return "\n".join(lines)
+    return f"{pad}{name}: {_yaml_scalar(value)}"
+
+
+def _render_fields_table(state: EntityState) -> str:
+    """Render a Markdown table summarizing each field's value, confidence, source."""
+    rows = ["| Field | Value | Confidence | Source |", "|---|---|---|---|"]
+    for field_name in sorted(state.fields):
+        fv = state.fields[field_name]
+        value_str = (
+            ", ".join(_yaml_scalar(v) for v in fv.value)
+            if isinstance(fv.value, (list, tuple))
+            else str(fv.value)
+        )
+        source = fv.provenances[0].url if fv.provenances else ""
+        source_link = f"[source]({source})" if source else "—"
+        rows.append(
+            f"| {field_name} | {value_str} | {fv.confidence:.2f} | {source_link} |"
+        )
+    return "\n".join(rows)
+
+
+def _render_provenance(state: EntityState) -> str:
+    """Render the Provenance section grouped by field."""
+    blocks: list[str] = []
+    for field_name in sorted(state.fields):
+        fv = state.fields[field_name]
+        value_str = (
+            ", ".join(str(v) for v in fv.value)
+            if isinstance(fv.value, (list, tuple))
+            else str(fv.value)
+        )
+        blocks.append(f"### {field_name} = {value_str}")
+        for prov in fv.provenances:
+            blocks.append(f"> {prov.snippet}")
+            blocks.append("")
+            blocks.append(
+                f"- Source: {prov.url}\n"
+                f"- Agent: `{prov.agent_id}` · Extractor: `{prov.extractor_model}` · "
+                f"Span: `{prov.span_id}`"
+            )
+            blocks.append("")
+    return "\n".join(blocks).rstrip() + "\n"
+
+
+def _render_markdown(state: EntityState) -> str:
+    """Produce the full Markdown file content for one entity."""
+    # Frontmatter
+    fm_lines = [
+        "---",
+        "# This file is managed by researcher. Edits will be overwritten on the next run.",
+        _yaml_field("researcher_type", state.entity_type),
+        _yaml_field("researcher_name", state.entity_name),
+        _yaml_field("researcher_runs", sorted(state.run_ids)),
+        # ISO 8601 timestamps are unambiguous in YAML; emit raw to keep the
+        # frontmatter queryable as a literal string by Dataview and humans.
+        f"researcher_updated: {state.updated_at.isoformat().replace('+00:00', 'Z')}",
+        _yaml_field(
+            "tags",
+            ["researcher", f"researcher/{state.entity_type}"],
+        ),
+    ]
+    for field_name in sorted(state.fields):
+        fv = state.fields[field_name]
+        fm_lines.append(_yaml_field(field_name, fv.value))
+    fm_lines.append("---")
+
+    # Body
+    body_parts = [
+        "",
+        f"# {state.entity_name}",
+        "",
+        "> Managed by `researcher`. Re-running the job will overwrite this file.",
+        "",
+        "## Fields",
+        "",
+        _render_fields_table(state),
+        "",
+        "## Provenance",
+        "",
+        _render_provenance(state),
+        "## Seen in Runs",
+        "",
+    ]
+    for run_id in sorted(state.run_ids):
+        body_parts.append(f"- `{run_id}`")
+    body_parts.append("")
+
+    return "\n".join(fm_lines) + "\n" + "\n".join(body_parts)
