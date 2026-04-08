@@ -153,3 +153,112 @@ async def test_native_dispatch_without_deps_falls_back_to_not_implemented() -> N
 
     # The NotImplementedError is caught by the orchestrator and mapped to ERROR.
     assert reason == StopReason.ERROR
+
+
+@pytest.mark.asyncio
+async def test_native_dispatch_propagates_enum_into_entity_schema() -> None:
+    """Regression guard: orchestrator._spawn_native_agent must carry the
+    FieldSpec.enum metadata into the entity_schema dict it passes to the
+    native agent. If this lookup drops `enum`, ExpandAgent's response
+    model silently loses its Literal constraints and free-form LLM output
+    lands in the store unchecked — the exact bug that silently bypassed
+    enum validation on the Israel-Hamas munitions test drive.
+    """
+    spec = RunSpec(
+        spec_id="wars",
+        goal="Wars",
+        entities=[
+            EntitySpec(
+                name="War",
+                fields=[
+                    FieldSpec(name="name", type="str", required=True),
+                    FieldSpec(
+                        name="outcome",
+                        type="str",
+                        enum=["decisive_victory", "stalemate", "treaty"],
+                    ),
+                ],
+                search_templates=[],
+            )
+        ],
+        seeds=["x"],
+        models={"fast": "m", "smart": "m", "heavy": "m"},
+        backend_policy="auto",
+        max_cycles=1,
+    )
+    # Capture the entity_schema the agent constructor receives.
+    captured: dict = {}
+
+    # Patch ExpandAgent in-module to snapshot the kwargs.
+    import researcher.agents.expand as expand_mod
+
+    real_init = expand_mod.ExpandAgent.__init__
+
+    def spy_init(self, *, entity_schema, **kwargs):
+        captured["entity_schema"] = entity_schema
+        real_init(self, entity_schema=entity_schema, **kwargs)
+
+    expand_mod.ExpandAgent.__init__ = spy_init  # type: ignore[method-assign]
+    try:
+        store = StubKnowledgeStore()
+        await store.open()
+        llm = StubLLMClient()
+        bus = StubEventBus()
+        resolver = StubEntityResolver()
+        entity_schema_stub = {
+            "entity_type": "War",
+            "fields": [{"name": "name", "type": "str", "required": True}],
+        }
+        writer = FactWriter(
+            store=store,
+            resolver=resolver,
+            entity_schema=entity_schema_stub,
+            emit_fact=_noop_fact,
+            emit_conflict=_noop_conflict,
+        )
+        scheduler = Scheduler(spec=spec, store=store)
+        budget = Budget(usd_cap=1.0, wall_cap_s=60)
+        orch = Orchestrator(
+            spec=spec,
+            store=store,
+            llm=llm,
+            bus=bus,
+            writer=writer,
+            scheduler=scheduler,
+            budget=budget,
+            run_id="r",
+        )
+        backend_resolver = BackendResolver(which_fn=_which_none)
+        orch.set_backend_resolver(backend_resolver)
+        orch.set_native_deps(_make_native_deps_with_canned_discover())
+
+        # Manually dispatch an EXPAND task so the native path hits ExpandAgent.
+        from datetime import UTC, datetime, timedelta
+
+        from researcher.models import Task, TaskKind
+        from researcher.storage.store import FieldCell
+
+        eid = await store.upsert_entity("War", "WWII", {
+            "name": FieldCell(
+                value="WWII",
+                confidence=1.0,
+                provenance_ids=[],
+                updated_at=datetime.now(UTC),
+            )
+        })
+        task = Task(
+            kind=TaskKind.EXPAND,
+            spec_ref="wars",
+            target_entity_id=eid,
+            budget_usd=0.01,
+            deadline_ts=datetime.now(UTC) + timedelta(minutes=5),
+        )
+        await orch._spawn_agent(task)
+
+        # The captured schema must include enum metadata for outcome.
+        assert "entity_schema" in captured
+        fields = captured["entity_schema"]["fields"]
+        outcome = next(f for f in fields if f["name"] == "outcome")
+        assert outcome.get("enum") == ["decisive_victory", "stalemate", "treaty"]
+    finally:
+        expand_mod.ExpandAgent.__init__ = real_init  # type: ignore[method-assign]

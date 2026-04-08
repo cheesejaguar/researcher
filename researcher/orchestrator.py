@@ -509,7 +509,7 @@ class Orchestrator:
             entity_schema_dict = {
                 "entity_type": primary.name,
                 "fields": [
-                    {"name": f.name, "type": f.type, "required": f.required}
+                    {"name": f.name, "type": f.type, "required": f.required, "enum": list(f.enum)}
                     for f in primary.fields
                 ],
             }
