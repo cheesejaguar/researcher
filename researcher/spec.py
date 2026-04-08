@@ -96,6 +96,10 @@ class RunSpec(BaseModel):
     # Declared relation types the agents should look for between entities.
     # Populated from the YAML spec; empty list means "no graph extraction".
     relations: list[RelationSpec] = Field(default_factory=list)
+    # Human-in-the-loop interrupt points. When set, the orchestrator pauses
+    # at each named point and consults the registered InterruptHandler for
+    # a decision. Known points: "after_initial_seed", "after_cycle_end".
+    interrupt_points: list[str] = Field(default_factory=list)
     # Cross-run accumulation policy:
     #   "overwrite" — each run resets entity state (legacy behavior).
     #   "merge"     — fields accumulate across runs with conflict-aware

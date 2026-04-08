@@ -110,6 +110,11 @@ def run(
             "conflict promotion."
         ),
     ),
+    interactive: bool = typer.Option(
+        False,
+        "--interactive",
+        help="Pause at declared interrupt points and prompt the user via stdin.",
+    ),
 ) -> None:
     """Run a research job from a YAML spec against the CLI subagent backend."""
     if backend not in ("auto", "cli", "api"):
@@ -142,6 +147,7 @@ def run(
             fast_startup=fast_startup,
             resume=resume,
             mode=mode,
+            interactive=interactive,
         )
     )
     typer.echo(f"[researcher run] done reason={reason.value}")
@@ -157,6 +163,7 @@ async def _execute_run(
     fast_startup: bool = False,
     resume: str = "",
     mode: str = "overwrite",
+    interactive: bool = False,
 ) -> StopReason:
     """Construct every wire and execute :meth:`Orchestrator.run` once.
 
@@ -348,6 +355,11 @@ async def _execute_run(
             )
             orch.set_backend_resolver(backend_resolver)
             orch.set_cli_runner_factory(_runner_factory)
+
+            if interactive:
+                from researcher.interrupts import StdinInterruptHandler
+
+                orch.set_interrupt_handler(StdinInterruptHandler())
 
             reason = await orch.run()
             return reason

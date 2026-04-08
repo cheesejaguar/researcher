@@ -97,6 +97,16 @@ class SubagentCallPayload(BaseModel):
     claims_emitted: int
 
 
+class InterruptRequestedPayload(BaseModel):
+    point: str
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class InterruptResolvedPayload(BaseModel):
+    point: str
+    decision: Literal["continue", "abort"]
+
+
 # ---------- Event envelope ----------
 
 
@@ -166,8 +176,18 @@ class SubagentCall(_EventBase):
     payload: SubagentCallPayload
 
 
+class InterruptRequested(_EventBase):
+    type: Literal["interrupt_requested"] = "interrupt_requested"
+    payload: InterruptRequestedPayload
+
+
+class InterruptResolved(_EventBase):
+    type: Literal["interrupt_resolved"] = "interrupt_resolved"
+    payload: InterruptResolvedPayload
+
+
 Event = Annotated[
-    CycleStart | CycleEnd | AgentSpawn | AgentStateChange | AgentLog | FactWritten | ConflictDetected | ConflictResolved | CostUpdate | BudgetWarning | RunComplete | SubagentCall,
+    CycleStart | CycleEnd | AgentSpawn | AgentStateChange | AgentLog | FactWritten | ConflictDetected | ConflictResolved | CostUpdate | BudgetWarning | RunComplete | SubagentCall | InterruptRequested | InterruptResolved,
     Field(discriminator="type"),
 ]
 

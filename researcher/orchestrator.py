@@ -35,9 +35,14 @@ from researcher.events import (
     CycleStart,
     CycleStartPayload,
     EventBus,
+    InterruptRequested,
+    InterruptRequestedPayload,
+    InterruptResolved,
+    InterruptResolvedPayload,
     RunComplete,
     RunCompletePayload,
 )
+from researcher.interrupts import InterruptHandler
 from researcher.llm.client import LLMClient
 from researcher.models import AgentResult, AgentState, Task, TaskKind
 from researcher.scheduler import Scheduler
@@ -89,6 +94,7 @@ class Orchestrator:
         self._obsidian_writer = obsidian_writer
         self._native_deps: Optional[NativeAgentDeps] = None
         self._resume_from = resume_from
+        self._interrupt_handler: Optional[InterruptHandler] = None
 
     def set_backend_resolver(self, resolver: BackendResolver) -> None:
         self._backend_resolver = resolver
@@ -97,6 +103,61 @@ class Orchestrator:
         self, factory: Callable[[CliKind], CliRunner]
     ) -> None:
         self._cli_runner_factory = factory
+
+    def set_interrupt_handler(self, handler: InterruptHandler) -> None:
+        """Register a human-in-the-loop handler.
+
+        The handler is consulted at each point listed in
+        ``spec.interrupt_points``. Without a handler (or when the spec
+        declares no points) the orchestrator runs to completion exactly
+        as before — the feature is strictly opt-in.
+        """
+        self._interrupt_handler = handler
+
+    async def _maybe_interrupt(
+        self, point: str, context: dict[str, Any]
+    ) -> bool:
+        """Consult the interrupt handler at a named point.
+
+        Returns ``True`` if the run should continue, ``False`` to abort.
+        Emits ``InterruptRequested`` and ``InterruptResolved`` events on the
+        bus so observers (TUI, replay tools) can see the pause.
+        """
+        if self._interrupt_handler is None:
+            return True
+        spec_points = getattr(self._spec, "interrupt_points", [])
+        if point not in spec_points:
+            return True
+        await self._bus.emit(
+            InterruptRequested(
+                seq=0,
+                ts=datetime.now(UTC),
+                run_id=self._run_id,
+                payload=InterruptRequestedPayload(
+                    point=point, context=context
+                ),
+            )
+        )
+        try:
+            decision = await self._interrupt_handler.handle(point, context)
+        except Exception:
+            decision_str = "continue"
+        else:
+            decision_str = (
+                decision.value if hasattr(decision, "value") else str(decision)
+            )
+        await self._bus.emit(
+            InterruptResolved(
+                seq=0,
+                ts=datetime.now(UTC),
+                run_id=self._run_id,
+                payload=InterruptResolvedPayload(
+                    point=point,
+                    decision=decision_str,  # type: ignore[arg-type]
+                ),
+            )
+        )
+        return decision_str == "continue"
 
     def set_native_deps(self, deps: NativeAgentDeps) -> None:
         """Opt in to the native-agent path by providing shared deps.
@@ -151,6 +212,17 @@ class Orchestrator:
 
         reason: StopReason = StopReason.NO_TASKS
         try:
+            # Optional HITL pause after seeding, before cycle 1. Checked even
+            # on resume so a restarted run can re-confirm before proceeding.
+            seed_ok = await self._maybe_interrupt(
+                "after_initial_seed",
+                {"pending_tasks": self._scheduler.pending},
+            )
+            if not seed_ok:
+                reason = StopReason.CTRL_C
+                # Skip the cycle loop entirely; the finally block below still
+                # runs drain + graceful_stop.
+                return reason
             while self._cycle < self._spec.max_cycles:
                 self._cycle += 1
                 self._reset_cycle_failure_counters()
@@ -216,6 +288,21 @@ class Orchestrator:
                 # Crash-safe checkpoint: snapshot scheduler + budget state
                 # so a crash here resumes from the next cycle, not cycle 0.
                 await self._save_checkpoint()
+
+                # Optional HITL pause at cycle boundary. Runs before budget /
+                # plateau checks so an explicit user abort takes precedence
+                # over graceful termination reasons.
+                cycle_ok = await self._maybe_interrupt(
+                    "after_cycle_end",
+                    {
+                        "cycle": self._cycle,
+                        "entities_total": metrics.entities_total,
+                        "cost_usd": metrics.cost_usd_total,
+                    },
+                )
+                if not cycle_ok:
+                    reason = StopReason.CTRL_C
+                    break
 
                 # Stop checks — subagent_cap is highest priority because it's
                 # a hard stop regardless of other state.
