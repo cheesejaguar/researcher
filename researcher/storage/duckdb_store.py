@@ -130,10 +130,27 @@ class DuckDBKnowledgeStore(KnowledgeStore):
                 confidence DOUBLE NOT NULL,
                 provenance_ids_json TEXT NOT NULL,
                 updated_at TIMESTAMP NOT NULL,
+                first_seen_run TEXT,
+                last_seen_run TEXT,
+                superseded_by_run TEXT,
                 PRIMARY KEY (entity_id, field_name)
             )
             """
         )
+        # Migrate existing fields tables to add the temporal columns when
+        # opening a DuckDB file created before v1.1 cross-run merge mode.
+        try:
+            c.execute("ALTER TABLE fields ADD COLUMN first_seen_run TEXT")
+        except duckdb.Error:
+            pass
+        try:
+            c.execute("ALTER TABLE fields ADD COLUMN last_seen_run TEXT")
+        except duckdb.Error:
+            pass
+        try:
+            c.execute("ALTER TABLE fields ADD COLUMN superseded_by_run TEXT")
+        except duckdb.Error:
+            pass
         c.execute(
             """
             CREATE TABLE IF NOT EXISTS embeddings (
@@ -269,14 +286,24 @@ class DuckDBKnowledgeStore(KnowledgeStore):
             return eid
 
     def _write_field(self, entity_id: str, field_name: str, cell: FieldCell) -> None:
-        """Insert-or-replace a single (entity_id, field_name) row."""
+        """Insert-or-replace a single (entity_id, field_name) row.
+
+        Always writes the legacy six-column tuple; the temporal columns
+        (first_seen_run / last_seen_run / superseded_by_run) are populated
+        only by :meth:`merge_field` and remain NULL on the overwrite path.
+        """
         conn = self._require_conn()
         conn.execute(
             "DELETE FROM fields WHERE entity_id = ? AND field_name = ?",
             [entity_id, field_name],
         )
         conn.execute(
-            "INSERT INTO fields VALUES (?, ?, ?, ?, ?, ?)",
+            """
+            INSERT INTO fields (
+                entity_id, field_name, value_json, confidence,
+                provenance_ids_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
             [
                 entity_id,
                 field_name,
@@ -316,6 +343,102 @@ class DuckDBKnowledgeStore(KnowledgeStore):
                 )
 
             return Entity(id=ent_row[0], type=ent_row[1], fields=fields)
+
+    # ---- cross-run merge -------------------------------------------------
+
+    async def merge_field(
+        self,
+        entity_id: str,
+        field_name: str,
+        value: Any,
+        confidence: float,
+        run_id: str,
+        provenance_ids: list[str],
+    ) -> dict:
+        """Merge a single field value into an entity with cross-run semantics.
+
+        Returns ``{"status": ...}`` where ``status`` is one of:
+          - ``"inserted"``                — no prior value, written fresh
+          - ``"confirmed"``               — same value as existing, last_seen_run bumped
+          - ``"superseded"``              — new value beat existing on confidence
+          - ``"conflict_kept_existing"``  — new value lost; existing wins
+        """
+        async with self._lock:
+            conn = self._require_conn()
+            existing = conn.execute(
+                "SELECT value_json, confidence, first_seen_run "
+                "FROM fields WHERE entity_id = ? AND field_name = ?",
+                [entity_id, field_name],
+            ).fetchone()
+            now = _now()
+            value_json = json.dumps(value)
+            prov_json = json.dumps(list(provenance_ids))
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO fields (
+                        entity_id, field_name, value_json, confidence,
+                        provenance_ids_json, updated_at,
+                        first_seen_run, last_seen_run, superseded_by_run
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    """,
+                    [
+                        entity_id,
+                        field_name,
+                        value_json,
+                        float(confidence),
+                        prov_json,
+                        now,
+                        run_id,
+                        run_id,
+                    ],
+                )
+                conn.execute(
+                    "UPDATE entities SET updated_at = ? WHERE id = ?",
+                    [now, entity_id],
+                )
+                return {"status": "inserted"}
+
+            existing_value_json, existing_conf, _first_seen = existing
+            existing_value = json.loads(existing_value_json)
+            if existing_value == value:
+                conn.execute(
+                    "UPDATE fields SET last_seen_run = ?, updated_at = ? "
+                    "WHERE entity_id = ? AND field_name = ?",
+                    [run_id, now, entity_id, field_name],
+                )
+                return {"status": "confirmed"}
+
+            if float(confidence) > float(existing_conf):
+                conn.execute(
+                    """
+                    UPDATE fields
+                       SET value_json = ?,
+                           confidence = ?,
+                           provenance_ids_json = ?,
+                           updated_at = ?,
+                           last_seen_run = ?,
+                           superseded_by_run = ?
+                     WHERE entity_id = ? AND field_name = ?
+                    """,
+                    [
+                        value_json,
+                        float(confidence),
+                        prov_json,
+                        now,
+                        run_id,
+                        run_id,
+                        entity_id,
+                        field_name,
+                    ],
+                )
+                conn.execute(
+                    "UPDATE entities SET updated_at = ? WHERE id = ?",
+                    [now, entity_id],
+                )
+                return {"status": "superseded"}
+
+            return {"status": "conflict_kept_existing"}
 
     # ---- generic query ---------------------------------------------------
 

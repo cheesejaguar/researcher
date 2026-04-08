@@ -105,3 +105,20 @@ class KnowledgeStore(ABC):
 
     @abstractmethod
     async def write_run_summary(self, run_id: str, summary: dict) -> None: ...
+
+    async def merge_field(
+        self,
+        entity_id: str,
+        field_name: str,
+        value: Any,
+        confidence: float,
+        run_id: str,
+        provenance_ids: list[str],
+    ) -> dict:
+        """Merge a single field value with cross-run conflict semantics.
+
+        Default: not supported. Concrete stores (DuckDBKnowledgeStore) override.
+        Returning ``{"status": "not_supported"}`` lets the FactWriter degrade
+        gracefully when a stub store is used in higher-layer tests.
+        """
+        return {"status": "not_supported"}

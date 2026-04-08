@@ -84,6 +84,12 @@ class RunSpec(BaseModel):
     # Obsidian integration — when set, a secondary ObsidianWriter sink
     # materializes FactClaims into Markdown files in this vault.
     obsidian_vault: Optional[str] = None
+    # Cross-run accumulation policy:
+    #   "overwrite" — each run resets entity state (legacy behavior).
+    #   "merge"     — fields accumulate across runs with conflict-aware
+    #                  promotion based on confidence and temporal provenance
+    #                  (first_seen_run / last_seen_run / superseded_by_run).
+    mode: Literal["overwrite", "merge"] = "overwrite"
 
 
 # ---------- YAML loader ----------

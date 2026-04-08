@@ -205,6 +205,8 @@ class FactWriter:
         emit_fact: Callable[[str, FactClaim], Awaitable[None]],
         emit_conflict: Callable[[str, list[FieldCell]], Awaitable[None]],
         queue_maxsize: int = 2048,
+        mode: str = "overwrite",
+        run_id: str = "",
     ) -> None:
         self._store = store
         self._resolver = resolver
@@ -213,6 +215,8 @@ class FactWriter:
         self._emit_conflict = emit_conflict
         self._queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=queue_maxsize)
         self._task: Optional[asyncio.Task] = None
+        self._mode = mode
+        self._run_id = run_id
         self._metrics = {
             "submitted": 0,
             "written": 0,
@@ -296,6 +300,14 @@ class FactWriter:
                 written=False, entity_id=None, reason="duplicate"
             )
 
+        # Cross-run merge path: skip the legacy detect_conflict / upsert flow
+        # and use store.merge_field, which carries first/last_seen_run +
+        # superseded_by_run metadata and applies confidence-aware promotion.
+        if self._mode == "merge":
+            scored_confidence = await score_confidence(claim, {})
+            claim = claim.model_copy(update={"confidence": scored_confidence})
+            return await self._persist_merge(claim)
+
         # 3. conflict detect
         existing_cells = await detect_conflict(claim, self._store)
         if existing_cells:
@@ -308,6 +320,79 @@ class FactWriter:
 
         # 5. persist provenance + field cell
         return await self._persist(claim)
+
+    async def _persist_merge(self, claim: FactClaim) -> WriteOutcome:
+        """Cross-run merge persist path. Resolves the entity by name,
+        records provenance, and calls ``store.merge_field`` for one claim.
+        """
+        # Look up an existing entity row with the same (type, name).
+        entity_id: Optional[str] = None
+        try:
+            rows = await self._store.query(
+                "SELECT id FROM entities WHERE entity_type = ? AND name = ?",
+                (claim.entity_type, claim.entity_name),
+            )
+            if rows:
+                entity_id = rows[0]["id"]
+        except Exception:
+            entity_id = None
+
+        if entity_id is None:
+            # Create the entity row first so merge_field has something to attach to.
+            now = datetime.now(UTC)
+            name_cell = FieldCell(
+                value=claim.entity_name,
+                confidence=1.0,
+                provenance_ids=[],
+                updated_at=now,
+            )
+            try:
+                entity_id = await self._store.upsert_entity(
+                    claim.entity_type, claim.entity_name, {"name": name_cell}
+                )
+            except Exception:
+                self._metrics["type_errors"] += 1
+                return WriteOutcome(
+                    written=False, entity_id=None, reason="store_error"
+                )
+
+        # Record provenance (best-effort; matches the overwrite path).
+        prov_id = uuid4().hex
+        try:
+            await self._store.record_provenance(
+                prov_id, claim.provenance.model_dump(mode="json")
+            )
+        except Exception:
+            pass
+
+        try:
+            merge_result = await self._store.merge_field(
+                entity_id=entity_id,
+                field_name=claim.field,
+                value=claim.value,
+                confidence=float(claim.confidence),
+                run_id=self._run_id,
+                provenance_ids=[prov_id],
+            )
+        except Exception:
+            self._metrics["type_errors"] += 1
+            return WriteOutcome(
+                written=False, entity_id=entity_id, reason="store_error"
+            )
+
+        status = merge_result.get("status", "")
+        self._metrics["written"] += 1
+        if status == "conflict_kept_existing":
+            self._metrics["conflicts"] += 1
+
+        try:
+            await self._emit_fact(entity_id, claim)
+        except Exception:
+            pass
+
+        return WriteOutcome(
+            written=True, entity_id=entity_id, reason=status or "ok"
+        )
 
     async def _persist(self, claim: FactClaim) -> WriteOutcome:
         """Record provenance, upsert the entity field, and emit fact_written."""

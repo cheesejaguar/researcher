@@ -100,10 +100,21 @@ def run(
             "continues from the next cycle."
         ),
     ),
+    mode: str = typer.Option(
+        "overwrite",
+        "--mode",
+        help=(
+            "overwrite | merge — overwrite resets entity state per run; "
+            "merge accumulates fields across runs with confidence-aware "
+            "conflict promotion."
+        ),
+    ),
 ) -> None:
     """Run a research job from a YAML spec against the CLI subagent backend."""
     if backend not in ("auto", "cli", "api"):
         raise typer.BadParameter(f"--backend must be one of auto|cli|api, got {backend!r}")
+    if mode not in ("overwrite", "merge"):
+        raise typer.BadParameter(f"--mode must be one of overwrite|merge, got {mode!r}")
 
     # When resuming, the run_id is dictated by --resume; the existing run
     # directory must already exist on disk so we can reopen its DuckDB.
@@ -129,6 +140,7 @@ def run(
             offline=offline,
             fast_startup=fast_startup,
             resume=resume,
+            mode=mode,
         )
     )
     typer.echo(f"[researcher run] done reason={reason.value}")
@@ -143,6 +155,7 @@ async def _execute_run(
     offline: bool,
     fast_startup: bool = False,
     resume: str = "",
+    mode: str = "overwrite",
 ) -> StopReason:
     """Construct every wire and execute :meth:`Orchestrator.run` once.
 
@@ -261,12 +274,18 @@ async def _execute_run(
                     )
                 )
 
+            # CLI flag overrides the spec's mode policy.
+            if mode != "overwrite":
+                spec_obj = spec_obj.model_copy(update={"mode": mode})
+
             writer = FactWriter(
                 store=store,
                 resolver=resolver,
                 entity_schema=entity_schema_dict,
                 emit_fact=_emit_fact_to_bus,
                 emit_conflict=_emit_conflict_to_bus,
+                mode=spec_obj.mode,
+                run_id=run_id,
             )
 
             scheduler = Scheduler(spec=spec_obj, store=store)
