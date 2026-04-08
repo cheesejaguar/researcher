@@ -1,0 +1,14 @@
+{"type":"cycle_start","seq":0,"ts":"2026-04-08T12:00:00Z","run_id":"run-demo","payload":{"cycle":1,"pending_tasks":2}}
+{"type":"agent_spawn","seq":1,"ts":"2026-04-08T12:00:01Z","run_id":"run-demo","payload":{"agent_id":"sub-1","task_id":"t1","kind":"discover"}}
+{"type":"agent_state_change","seq":2,"ts":"2026-04-08T12:00:02Z","run_id":"run-demo","payload":{"agent_id":"sub-1","old":"idle","new":"planning"}}
+{"type":"agent_state_change","seq":3,"ts":"2026-04-08T12:00:03Z","run_id":"run-demo","payload":{"agent_id":"sub-1","old":"planning","new":"fetching"}}
+{"type":"agent_log","seq":4,"ts":"2026-04-08T12:00:04Z","run_id":"run-demo","payload":{"agent_id":"sub-1","level":"info","msg":"dispatching to claude -p"}}
+{"type":"subagent_call","seq":5,"ts":"2026-04-08T12:00:10Z","run_id":"run-demo","payload":{"agent_id":"sub-1","task_id":"t1","cli_kind":"claude_code","wall_ms":6000,"exit_code":0,"claims_emitted":4}}
+{"type":"fact_written","seq":6,"ts":"2026-04-08T12:00:11Z","run_id":"run-demo","payload":{"entity_id":"ent-1","entity_type":"War","field":"name","value":"World War II","confidence":0.98,"source_url":"https://en.wikipedia.org/wiki/World_War_II"}}
+{"type":"fact_written","seq":7,"ts":"2026-04-08T12:00:12Z","run_id":"run-demo","payload":{"entity_id":"ent-1","entity_type":"War","field":"start_year","value":1939,"confidence":0.97,"source_url":"https://en.wikipedia.org/wiki/World_War_II"}}
+{"type":"fact_written","seq":8,"ts":"2026-04-08T12:00:12Z","run_id":"run-demo","payload":{"entity_id":"ent-1","entity_type":"War","field":"end_year","value":1945,"confidence":0.97,"source_url":"https://en.wikipedia.org/wiki/World_War_II"}}
+{"type":"fact_written","seq":9,"ts":"2026-04-08T12:00:12Z","run_id":"run-demo","payload":{"entity_id":"ent-1","entity_type":"War","field":"belligerents","value":["Allies","Axis"],"confidence":0.96,"source_url":"https://en.wikipedia.org/wiki/World_War_II"}}
+{"type":"agent_state_change","seq":10,"ts":"2026-04-08T12:00:13Z","run_id":"run-demo","payload":{"agent_id":"sub-1","old":"fetching","new":"done"}}
+{"type":"cost_update","seq":11,"ts":"2026-04-08T12:00:14Z","run_id":"run-demo","payload":{"cost_usd_total":0.00,"tokens_in_total":500,"tokens_out_total":300}}
+{"type":"cycle_end","seq":12,"ts":"2026-04-08T12:00:15Z","run_id":"run-demo","payload":{"cycle":1,"claims_written":4,"entities_total":1,"cost_usd":0.0}}
+{"type":"run_complete","seq":13,"ts":"2026-04-08T12:00:16Z","run_id":"run-demo","payload":{"reason":"plateau","entities":1,"cost_usd":0.0,"wall_s":16.0,"db_path":"runs/run-demo/store.duckdb"}}

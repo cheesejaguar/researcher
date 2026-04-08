@@ -79,6 +79,15 @@ export const RunCompletePayload = z.object({
   db_path: z.string(),
 });
 
+export const SubagentCallPayload = z.object({
+  agent_id: z.string(),
+  task_id: z.string(),
+  cli_kind: z.enum(["claude_code", "codex"]),
+  wall_ms: z.number().int(),
+  exit_code: z.number().int().nullable(),
+  claims_emitted: z.number().int(),
+});
+
 // ---------- Event envelope ----------
 
 const base = {
@@ -98,6 +107,7 @@ export const ConflictResolved = z.object({ type: z.literal("conflict_resolved"),
 export const CostUpdate = z.object({ type: z.literal("cost_update"), ...base, payload: CostUpdatePayload });
 export const BudgetWarning = z.object({ type: z.literal("budget_warning"), ...base, payload: BudgetWarningPayload });
 export const RunComplete = z.object({ type: z.literal("run_complete"), ...base, payload: RunCompletePayload });
+export const SubagentCall = z.object({ type: z.literal("subagent_call"), ...base, payload: SubagentCallPayload });
 
 export const Event = z.discriminatedUnion("type", [
   CycleStart,
@@ -111,6 +121,7 @@ export const Event = z.discriminatedUnion("type", [
   CostUpdate,
   BudgetWarning,
   RunComplete,
+  SubagentCall,
 ]);
 
 export type Event = z.infer<typeof Event>;
@@ -125,6 +136,7 @@ export type ConflictResolved = z.infer<typeof ConflictResolved>;
 export type CostUpdate = z.infer<typeof CostUpdate>;
 export type BudgetWarning = z.infer<typeof BudgetWarning>;
 export type RunComplete = z.infer<typeof RunComplete>;
+export type SubagentCall = z.infer<typeof SubagentCall>;
 
 export function parseEvent(raw: unknown): Event {
   return Event.parse(raw);
