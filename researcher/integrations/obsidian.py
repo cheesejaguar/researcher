@@ -194,3 +194,87 @@ def _render_markdown(state: EntityState) -> str:
     body_parts.append("")
 
     return "\n".join(fm_lines) + "\n" + "\n".join(body_parts)
+
+
+# ---------- ObsidianWriter ----------
+
+
+class ObsidianWriter:
+    """Secondary write-through sink that materializes FactClaims into Markdown.
+
+    Thread-safety: not thread-safe. Designed for a single asyncio event loop.
+    The orchestrator owns the writer's lifecycle.
+    """
+
+    def __init__(
+        self,
+        vault_path: Path | str,
+        subdir: str = "researcher",
+        flush_interval_s: float = 0.1,
+    ) -> None:
+        self._vault_path = Path(vault_path).expanduser()
+        self._subdir = subdir
+        self._flush_interval_s = flush_interval_s
+        self._pending: dict[tuple[str, str], EntityState] = {}
+        self._dirty: set[tuple[str, str]] = set()
+        self._lock = asyncio.Lock()
+        self._debounce_task: Optional[asyncio.Task] = None
+        self._started: bool = False
+        self._stopped: bool = False
+        self._stats: dict[str, int] = {
+            "writes": 0,
+            "coalesced_claims": 0,
+            "errors": 0,
+            "sanitized_names": 0,
+        }
+
+    @property
+    def stats(self) -> dict[str, int]:
+        return dict(self._stats)
+
+    @property
+    def root_dir(self) -> Path:
+        return self._vault_path / self._subdir
+
+    async def start(self) -> None:
+        if self._started:
+            return
+        # Validate that the vault root (the user-provided directory) exists.
+        if not self._vault_path.exists():
+            raise ObsidianVaultNotFound(
+                f"Obsidian vault root does not exist: {self._vault_path}"
+            )
+        try:
+            self.root_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise ObsidianWriterError(
+                f"could not create Obsidian subdir {self.root_dir}: {e}"
+            ) from e
+        self._debounce_task = asyncio.create_task(self._debounce_loop())
+        self._started = True
+
+    async def stop(self) -> None:
+        if self._stopped:
+            return
+        # Final flush — even if start() was never called, flush is cheap.
+        try:
+            await self.flush()
+        except Exception:
+            pass
+        self._stopped = True
+        if self._debounce_task is not None:
+            self._debounce_task.cancel()
+            try:
+                await self._debounce_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._debounce_task = None
+
+    async def flush(self) -> None:
+        """Placeholder — real implementation in Task 6."""
+        return
+
+    async def _debounce_loop(self) -> None:
+        """Placeholder — real implementation in Task 6."""
+        while not self._stopped:
+            await asyncio.sleep(self._flush_interval_s)

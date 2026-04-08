@@ -153,3 +153,60 @@ def test_render_contains_seen_in_runs_section():
     md = _render_markdown(_sample_state())
     assert "## Seen in Runs" in md
     assert "- `run-2026-04-08-wars-1`" in md
+
+
+# ---------- Lifecycle ----------
+
+from pathlib import Path
+
+import pytest
+
+from researcher.integrations.obsidian import ObsidianVaultNotFound, ObsidianWriter
+
+
+@pytest.mark.asyncio
+async def test_start_creates_vault_subdir(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        assert (tmp_path / "researcher").is_dir()
+    finally:
+        await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_start_raises_on_missing_vault_root(tmp_path: Path):
+    bogus = tmp_path / "does-not-exist" / "vault"
+    writer = ObsidianWriter(vault_path=bogus)
+    with pytest.raises(ObsidianVaultNotFound):
+        await writer.start()
+
+
+@pytest.mark.asyncio
+async def test_start_is_idempotent(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    await writer.start()  # should not raise
+    try:
+        assert (tmp_path / "researcher").is_dir()
+    finally:
+        await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_is_idempotent(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    await writer.stop()
+    await writer.stop()  # should not raise
+
+
+@pytest.mark.asyncio
+async def test_stats_initially_zero(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    assert writer.stats == {
+        "writes": 0,
+        "coalesced_claims": 0,
+        "errors": 0,
+        "sanitized_names": 0,
+    }
