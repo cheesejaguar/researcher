@@ -30,6 +30,8 @@ from researcher.backends.models import BackendChoice, CliKind
 from researcher.backends.resolver import BackendResolver
 from researcher.budget import Budget, BudgetExceededError
 from researcher.events import (
+    CoverageReport,
+    CoverageReportPayload,
     CycleEnd,
     CycleEndPayload,
     CycleStart,
@@ -47,7 +49,7 @@ from researcher.llm.client import LLMClient
 from researcher.models import AgentResult, AgentState, Task, TaskKind
 from researcher.scheduler import Scheduler
 from researcher.spec import RunSpec
-from researcher.storage.store import KnowledgeStore
+from researcher.storage.store import CoverageSnapshot, KnowledgeStore, StoreMetrics
 from researcher.storage.writer import FactWriter
 
 
@@ -75,6 +77,7 @@ class Orchestrator:
         max_parallel_agents: int = 6,
         obsidian_writer: Any = None,  # Optional[ObsidianWriter]; avoid import cycle
         resume_from: Optional[int] = None,
+        coverage_confidence_threshold: float = 0.5,
     ) -> None:
         self._spec = spec
         self._store = store
@@ -97,6 +100,9 @@ class Orchestrator:
         self._interrupt_handler: Optional[InterruptHandler] = None
         # v1.2: optional difficulty-aware compute gate (opt-in).
         self._difficulty_gate: Any = None
+        # v1.2 #8: confidence threshold below which a field cell counts
+        # as "low confidence" in the structured CoverageReport event.
+        self._coverage_confidence_threshold = float(coverage_confidence_threshold)
 
     def set_backend_resolver(self, resolver: BackendResolver) -> None:
         self._backend_resolver = resolver
@@ -342,6 +348,7 @@ class Orchestrator:
                 metrics = await self._store.snapshot_metrics()
                 await self._scheduler.update_from_metrics(metrics)
                 await self._emit_cycle_end(metrics)
+                await self._maybe_emit_coverage_report(metrics)
 
                 # Crash-safe checkpoint: snapshot scheduler + budget state
                 # so a crash here resumes from the next cycle, not cycle 0.
@@ -557,6 +564,87 @@ class Orchestrator:
                 ),
             )
         )
+
+    async def _maybe_emit_coverage_report(self, metrics: StoreMetrics) -> None:
+        """Emit a structured CoverageReport after cycle_end (v1.2 #8).
+
+        Best-effort: stores that don't implement ``snapshot_coverage``
+        (older test stubs, the bare base class) are silently skipped.
+        Like ``_save_checkpoint``, this is purely a derived signal — a
+        failure here must never crash the run loop.
+        """
+        snap_fn = getattr(self._store, "snapshot_coverage", None)
+        if snap_fn is None or not callable(snap_fn):
+            return
+        try:
+            snapshot = await snap_fn(
+                confidence_threshold=self._coverage_confidence_threshold
+            )
+        except Exception:
+            return
+        try:
+            await self._emit_coverage_report(metrics, snapshot)
+        except Exception:
+            pass
+
+    async def _emit_coverage_report(
+        self, metrics: StoreMetrics, snapshot: CoverageSnapshot
+    ) -> None:
+        payload = CoverageReportPayload(
+            cycle=self._cycle,
+            entities_by_type=dict(metrics.by_type),
+            fields_below_confidence=dict(snapshot.fields_below_confidence),
+            confidence_threshold=self._coverage_confidence_threshold,
+            conflicts_open=int(metrics.conflicts_open),
+            source_type_breakdown=dict(snapshot.source_type_breakdown),
+            next_recommended_seeds=self._recommend_next_seeds(metrics, snapshot),
+        )
+        await self._bus.emit(
+            CoverageReport(
+                seq=0,
+                ts=datetime.now(UTC),
+                run_id=self._run_id,
+                payload=payload,
+            )
+        )
+
+    @staticmethod
+    def _recommend_next_seeds(
+        metrics: StoreMetrics, snapshot: CoverageSnapshot
+    ) -> list[str]:
+        """Heuristic v1 recommender: return up to 3 short suggestion strings.
+
+        Pure function (no I/O). The TUI / external tools render these as
+        a bullet list. The list is intentionally simple — sparse types,
+        open conflicts, low-confidence fields — and capped at three to
+        keep the signal scannable.
+        """
+        seeds: list[str] = []
+
+        # Sparse types: any entity type with fewer than 5 entities.
+        sparse = sorted(
+            (t for t, n in metrics.by_type.items() if int(n) < 5),
+            key=lambda t: (metrics.by_type.get(t, 0), t),
+        )
+        for t in sparse:
+            if len(seeds) >= 3:
+                break
+            seeds.append(f"expand coverage of {t}")
+
+        # Open conflicts: a single line with the count.
+        if int(metrics.conflicts_open) > 0 and len(seeds) < 3:
+            seeds.append(f"resolve {int(metrics.conflicts_open)} open conflicts")
+
+        # Low-confidence fields: pick the top 2 by count.
+        if snapshot.fields_below_confidence and len(seeds) < 3:
+            top = sorted(
+                snapshot.fields_below_confidence.items(),
+                key=lambda kv: (-int(kv[1]), kv[0]),
+            )[:2]
+            field_names = ", ".join(name for name, _ in top)
+            seeds.append(f"verify low-confidence fields: {field_names}")
+
+        return seeds[:3]
 
     async def _save_checkpoint(self) -> None:
         """Persist the orchestrator's control state for crash-safe resume.

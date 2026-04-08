@@ -88,6 +88,16 @@ export const SubagentCallPayload = z.object({
   claims_emitted: z.number().int(),
 });
 
+export const CoverageReportPayload = z.object({
+  cycle: z.number().int(),
+  entities_by_type: z.record(z.string(), z.number().int()),
+  fields_below_confidence: z.record(z.string(), z.number().int()),
+  confidence_threshold: z.number(),
+  conflicts_open: z.number().int(),
+  source_type_breakdown: z.record(z.string(), z.number().int()),
+  next_recommended_seeds: z.array(z.string()),
+});
+
 // ---------- Event envelope ----------
 
 const base = {
@@ -108,6 +118,7 @@ export const CostUpdate = z.object({ type: z.literal("cost_update"), ...base, pa
 export const BudgetWarning = z.object({ type: z.literal("budget_warning"), ...base, payload: BudgetWarningPayload });
 export const RunComplete = z.object({ type: z.literal("run_complete"), ...base, payload: RunCompletePayload });
 export const SubagentCall = z.object({ type: z.literal("subagent_call"), ...base, payload: SubagentCallPayload });
+export const CoverageReport = z.object({ type: z.literal("coverage_report"), ...base, payload: CoverageReportPayload });
 
 export const Event = z.discriminatedUnion("type", [
   CycleStart,
@@ -122,6 +133,7 @@ export const Event = z.discriminatedUnion("type", [
   BudgetWarning,
   RunComplete,
   SubagentCall,
+  CoverageReport,
 ]);
 
 export type Event = z.infer<typeof Event>;
@@ -137,6 +149,7 @@ export type CostUpdate = z.infer<typeof CostUpdate>;
 export type BudgetWarning = z.infer<typeof BudgetWarning>;
 export type RunComplete = z.infer<typeof RunComplete>;
 export type SubagentCall = z.infer<typeof SubagentCall>;
+export type CoverageReport = z.infer<typeof CoverageReport>;
 
 export function parseEvent(raw: unknown): Event {
   return Event.parse(raw);

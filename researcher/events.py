@@ -107,6 +107,26 @@ class InterruptResolvedPayload(BaseModel):
     decision: Literal["continue", "abort"]
 
 
+class CoverageReportPayload(BaseModel):
+    """Structured coverage signal emitted after every cycle_end (v1.2 #8).
+
+    Externalizes the plateau / coverage signal the orchestrator already
+    computes internally so external tools can ingest a machine-readable
+    snapshot per cycle: which entity types are sparse, which fields are
+    underconfident, how many conflicts are still open, what kinds of
+    sources are dominating, and a short heuristic suggestion list of
+    "what to do next".
+    """
+
+    cycle: int
+    entities_by_type: dict[str, int]
+    fields_below_confidence: dict[str, int]
+    confidence_threshold: float
+    conflicts_open: int
+    source_type_breakdown: dict[str, int]
+    next_recommended_seeds: list[str]
+
+
 # ---------- Event envelope ----------
 
 
@@ -186,8 +206,13 @@ class InterruptResolved(_EventBase):
     payload: InterruptResolvedPayload
 
 
+class CoverageReport(_EventBase):
+    type: Literal["coverage_report"] = "coverage_report"
+    payload: CoverageReportPayload
+
+
 Event = Annotated[
-    CycleStart | CycleEnd | AgentSpawn | AgentStateChange | AgentLog | FactWritten | ConflictDetected | ConflictResolved | CostUpdate | BudgetWarning | RunComplete | SubagentCall | InterruptRequested | InterruptResolved,
+    CycleStart | CycleEnd | AgentSpawn | AgentStateChange | AgentLog | FactWritten | ConflictDetected | ConflictResolved | CostUpdate | BudgetWarning | RunComplete | SubagentCall | InterruptRequested | InterruptResolved | CoverageReport,
     Field(discriminator="type"),
 ]
 

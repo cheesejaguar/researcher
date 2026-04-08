@@ -41,10 +41,12 @@ from pydantic import BaseModel
 
 from researcher.storage.store import (
     Conflict,
+    CoverageSnapshot,
     Entity,
     FieldCell,
     KnowledgeStore,
     StoreMetrics,
+    _classify_source,
 )
 
 
@@ -869,6 +871,65 @@ class DuckDBKnowledgeStore(KnowledgeStore):
             )
 
     # ---- metrics + run summaries ----------------------------------------
+
+    async def snapshot_coverage(
+        self, confidence_threshold: float = 0.5
+    ) -> CoverageSnapshot:
+        """Coverage signals only the store can answer (v1.2 #8).
+
+        Returns the per-field count of cells whose confidence is below
+        ``confidence_threshold`` (skipping null-valued cells, which are
+        unknown rather than low-confidence) and the per-source-type
+        count of provenance rows. URLs are bucketed via
+        :func:`_classify_source`. Provenance rows are deduped by
+        ``(entity_id, field, url)`` when those keys exist in the
+        recorded JSON, falling back to ``(provenance_id, url)``
+        otherwise so production rows (which only carry a ``url``) are
+        not over-counted.
+        """
+        async with self._lock:
+            conn = self._require_conn()
+            field_rows = conn.execute(
+                "SELECT field_name, COUNT(*) FROM fields "
+                "WHERE value_json != 'null' AND confidence < ? "
+                "GROUP BY field_name",
+                [float(confidence_threshold)],
+            ).fetchall()
+            fields_below: dict[str, int] = {}
+            for fname, cnt in field_rows:
+                fields_below[fname] = fields_below.get(fname, 0) + int(cnt)
+
+            source_breakdown: dict[str, int] = {}
+            try:
+                prov_rows = conn.execute(
+                    "SELECT provenance_id, data_json FROM provenance"
+                ).fetchall()
+            except duckdb.Error:
+                prov_rows = []
+
+            seen: set[tuple[str, str, str]] = set()
+            for prov_id, data_json in prov_rows:
+                try:
+                    data = json.loads(data_json) if data_json else {}
+                except (TypeError, ValueError):
+                    data = {}
+                url = str(data.get("url", "") or "")
+                ent_id = data.get("entity_id")
+                field = data.get("field")
+                if ent_id is not None and field is not None:
+                    key = (str(ent_id), str(field), url)
+                else:
+                    key = (str(prov_id), "", url)
+                if key in seen:
+                    continue
+                seen.add(key)
+                bucket = _classify_source(url)
+                source_breakdown[bucket] = source_breakdown.get(bucket, 0) + 1
+
+            return CoverageSnapshot(
+                fields_below_confidence=fields_below,
+                source_type_breakdown=source_breakdown,
+            )
 
     async def snapshot_metrics(self) -> StoreMetrics:
         async with self._lock:

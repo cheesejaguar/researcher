@@ -48,6 +48,44 @@ class StoreMetrics(BaseModel):
     cost_usd_total: float
 
 
+class CoverageSnapshot(BaseModel):
+    """Two coverage signals only the store can answer (v1.2 #8).
+
+    Returned by :meth:`KnowledgeStore.snapshot_coverage`. Everything
+    else in the orchestrator's :class:`CoverageReportPayload` is derived
+    from :class:`StoreMetrics`; this snapshot supplies the field-level
+    confidence distribution and the per-source-type provenance row
+    counts that the metrics struct doesn't expose.
+    """
+
+    fields_below_confidence: dict[str, int]
+    source_type_breakdown: dict[str, int]
+
+
+def _classify_source(url: str) -> str:
+    """Classify a provenance URL into a coarse source-type bucket.
+
+    Buckets:
+      - ``http``    — http:// or https://
+      - ``file``    — file://
+      - ``native``  — native://
+      - ``stub``    — stub://
+      - ``other``   — anything else, including the empty string
+    """
+    if not url:
+        return "other"
+    lowered = url.lower()
+    if lowered.startswith("http://") or lowered.startswith("https://"):
+        return "http"
+    if lowered.startswith("file://"):
+        return "file"
+    if lowered.startswith("native://"):
+        return "native"
+    if lowered.startswith("stub://"):
+        return "stub"
+    return "other"
+
+
 class KnowledgeStore(ABC):
     """Async-context-managed typed object store.
 
@@ -102,6 +140,20 @@ class KnowledgeStore(ABC):
 
     @abstractmethod
     async def snapshot_metrics(self) -> StoreMetrics: ...
+
+    async def snapshot_coverage(
+        self, confidence_threshold: float = 0.5
+    ) -> CoverageSnapshot:
+        """Return a coverage snapshot (v1.2 #8).
+
+        Default implementation returns an empty snapshot so older test
+        stubs that don't override this method don't crash. Concrete
+        stores (DuckDBKnowledgeStore, StubKnowledgeStore) override.
+        """
+        return CoverageSnapshot(
+            fields_below_confidence={},
+            source_type_breakdown={},
+        )
 
     @abstractmethod
     async def write_run_summary(self, run_id: str, summary: dict) -> None: ...

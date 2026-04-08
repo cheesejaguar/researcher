@@ -11,10 +11,12 @@ from pydantic import BaseModel
 
 from researcher.storage.store import (
     Conflict,
+    CoverageSnapshot,
     Entity,
     FieldCell,
     KnowledgeStore,
     StoreMetrics,
+    _classify_source,
 )
 
 
@@ -126,6 +128,38 @@ class StubKnowledgeStore(KnowledgeStore):
             fields_filled_pct=pct,
             conflicts_open=sum(1 for c in self._conflicts if c.status == "open"),
             cost_usd_total=self._cost_usd,
+        )
+
+    async def snapshot_coverage(
+        self, confidence_threshold: float = 0.5
+    ) -> CoverageSnapshot:
+        fields_below: dict[str, int] = {}
+        for ent in self._entities.values():
+            for field_name, cell in ent.fields.items():
+                if cell.value is None:
+                    continue
+                if float(cell.confidence) < float(confidence_threshold):
+                    fields_below[field_name] = fields_below.get(field_name, 0) + 1
+
+        source_breakdown: dict[str, int] = {}
+        seen: set[tuple[str, str, str]] = set()
+        for prov_id, data in self._provenance.items():
+            url = str((data or {}).get("url", "") or "")
+            ent_id = (data or {}).get("entity_id")
+            field = (data or {}).get("field")
+            if ent_id is not None and field is not None:
+                key = (str(ent_id), str(field), url)
+            else:
+                key = (str(prov_id), "", url)
+            if key in seen:
+                continue
+            seen.add(key)
+            bucket = _classify_source(url)
+            source_breakdown[bucket] = source_breakdown.get(bucket, 0) + 1
+
+        return CoverageSnapshot(
+            fields_below_confidence=fields_below,
+            source_type_breakdown=source_breakdown,
         )
 
     async def write_run_summary(self, run_id: str, summary: dict) -> None:
