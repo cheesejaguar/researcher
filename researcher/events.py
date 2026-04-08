@@ -80,7 +80,9 @@ class BudgetWarningPayload(BaseModel):
 
 
 class RunCompletePayload(BaseModel):
-    reason: Literal["budget", "plateau", "ctrl_c", "error", "deadline"]
+    reason: Literal[
+        "budget", "plateau", "ctrl_c", "error", "deadline", "no_tasks", "subagent_cap"
+    ]
     entities: int
     cost_usd: float
     wall_s: float

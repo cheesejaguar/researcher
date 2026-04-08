@@ -33,8 +33,9 @@ from researcher.events import (
     RunComplete,
     RunCompletePayload,
 )
+from researcher.agents.subagent import SubagentResearcher
 from researcher.llm.client import LLMClient
-from researcher.models import AgentResult, Task
+from researcher.models import AgentResult, AgentState, FactClaim, Task
 from researcher.scheduler import Scheduler
 from researcher.spec import RunSpec
 from researcher.storage.store import KnowledgeStore
@@ -122,10 +123,15 @@ class Orchestrator:
         self._budget.start_wall_clock()
         await self._scheduler.seed()
 
+        # Start the writer drain loop for the whole run.
+        self._writer.start()
+
         reason: StopReason = StopReason.NO_TASKS
         try:
             while self._cycle < self._spec.max_cycles:
                 self._cycle += 1
+                self._reset_cycle_failure_counters()
+
                 batch = await self._scheduler.next_batch(self._spec.max_entities_per_cycle)
                 if not batch:
                     reason = StopReason.NO_TASKS
@@ -137,21 +143,43 @@ class Orchestrator:
                 results = await asyncio.gather(
                     *(self._spawn_agent(t) for t in batch), return_exceptions=True
                 )
+
+                subagent_cap_hit = False
+                saw_real_exception = False
                 for t, r in zip(batch, results):
                     if isinstance(r, Exception):
+                        saw_real_exception = True
                         continue
+                    # Submit successful claims to the writer.
+                    for claim in r.claims:
+                        try:
+                            await self._writer.submit(claim)
+                        except asyncio.QueueFull:
+                            pass  # drops counted in writer.metrics
+                    # Record failures for circuit-break counter + detect subagent_cap.
+                    if r.state == AgentState.FAILED and r.error:
+                        if r.error == "subagent_cap":
+                            subagent_cap_hit = True
+                        else:
+                            self._record_subagent_failure(r.error)
                     await self._scheduler.mark_done(t.id, r)
 
-                # Serial reduce: drain writer queue.
-                # NOTE: Wave 1-E replaces this with a per-cycle drain that keeps
-                # the writer running across cycles via a sentinel boundary.
-                # For Wave 0 this is a placeholder.
+                if saw_real_exception:
+                    reason = StopReason.ERROR
+                    break
+
+                # Serial reduce: wait for this cycle's claims to process.
+                await self._writer.quiesce()
 
                 metrics = await self._store.snapshot_metrics()
                 await self._scheduler.update_from_metrics(metrics)
                 await self._emit_cycle_end(metrics)
 
-                # Stop checks.
+                # Stop checks — subagent_cap is highest priority because it's
+                # a hard stop regardless of other state.
+                if subagent_cap_hit:
+                    reason = StopReason.SUBAGENT_CAP
+                    break
                 if self._budget.exceeded():
                     reason = StopReason.BUDGET
                     break
@@ -168,19 +196,63 @@ class Orchestrator:
             reason = StopReason.BUDGET
         except Exception:
             reason = StopReason.ERROR
-            raise
+            # Don't re-raise: _graceful_stop still needs to run.
         finally:
+            # Drain the writer before emitting run_complete.
+            try:
+                await self._writer.drain()
+            except Exception:
+                pass
             await self._graceful_stop(reason)
 
         return reason
 
     async def _spawn_agent(self, task: Task) -> AgentResult:
-        """Wave 0 placeholder: actual agent dispatch lands in Wave 1-E."""
-        async with self._sem:
-            # Wave 1-E: look up agent class by TaskKind, instantiate, call .run(task).
-            from researcher.models import AgentState
+        """Dispatch a task to either the subagent path or the native path.
 
-            return AgentResult(task_id=task.id, agent_id="stub", state=AgentState.DONE)
+        Wave 1-E wires only the subagent path; the native path raises
+        NotImplementedError until Wave 1-D lands.
+        """
+        async with self._sem:
+            choice = self._resolver_pick(task)
+            if choice.kind is None:
+                raise NotImplementedError(
+                    "Native agent path is not yet implemented (Wave 1-D). "
+                    "Install `claude` or `codex` on PATH and retry, or set "
+                    "`backend_policy: cli` in the run spec."
+                )
+            if self._cli_runner_factory is None:
+                raise RuntimeError(
+                    "Orchestrator has a backend resolver but no CLI runner factory. "
+                    "Call set_cli_runner_factory() before run()."
+                )
+
+            runner = self._cli_runner_factory(choice.kind)
+            entity_type_dict = {"entity_type": "Entity", "fields": []}
+            if self._spec.entities:
+                primary = self._spec.entities[0]
+                entity_type_dict = {
+                    "entity_type": primary.name,
+                    "fields": [
+                        {"name": f.name, "type": f.type, "required": f.required}
+                        for f in primary.fields
+                    ],
+                }
+
+            agent = SubagentResearcher(
+                agent_id=f"sub-{task.id[:8]}",
+                llm=self._llm,
+                store=self._store,
+                emit=self._bus.emit,
+                run_id=self._run_id,
+                runner=runner,
+                cli_kind=choice.kind,
+                entity_schema=entity_type_dict,
+                budget=self._budget,
+                goal=self._spec.goal,
+                timeout_s=float(self._spec.subagent_timeout_s),
+            )
+            return await agent.run(task)
 
     async def _emit_cycle_start(self, pending: int) -> None:
         await self._bus.emit(
