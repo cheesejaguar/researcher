@@ -96,6 +96,52 @@ class OpenRouterClient(LLMClient):
         ).encode()
         return hashlib.sha256(blob).hexdigest()
 
+    def _apply_prompt_caching(self, messages: list[dict]) -> list[dict]:
+        """Mark the shared system prefix as a cacheable content part.
+
+        Anthropic's prompt caching (and OpenRouter's pass-through) accepts
+        ``cache_control`` on a message-content part. The cacheable content
+        must be in list-of-parts format. Only the LAST system message is
+        marked so the provider's cache hits when the same shared system
+        context is reused across many parallel workers.
+
+        Per Anthropic's June 2025 engineering blog, this yields ~90% input
+        cost reduction and ~75% latency reduction for orchestrators sharing
+        a system prompt across many parallel workers.
+
+        Pure: returns a new list and does not mutate the input.
+        """
+        if not messages:
+            return list(messages)
+        out = [dict(m) for m in messages]
+        last_system_idx: int | None = None
+        for i in range(len(out) - 1, -1, -1):
+            if out[i].get("role") == "system":
+                last_system_idx = i
+                break
+        if last_system_idx is None:
+            return out
+        sys_msg = out[last_system_idx]
+        content = sys_msg.get("content")
+        if isinstance(content, str):
+            out[last_system_idx] = {
+                **sys_msg,
+                "content": [
+                    {
+                        "type": "text",
+                        "text": content,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        elif isinstance(content, list) and content:
+            new_content = [dict(p) if isinstance(p, dict) else p for p in content]
+            first = new_content[0]
+            if isinstance(first, dict):
+                first["cache_control"] = {"type": "ephemeral"}
+            out[last_system_idx] = {**sys_msg, "content": new_content}
+        return out
+
     async def complete(
         self,
         messages: list[dict],
@@ -113,9 +159,10 @@ class OpenRouterClient(LLMClient):
 
         model = self._model_map[tier]
         client = self._get_client()
+        cached_messages = self._apply_prompt_caching(messages)
         kwargs: dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": cached_messages,
             "temperature": temperature,
         }
         if max_tokens is not None:
@@ -130,6 +177,16 @@ class OpenRouterClient(LLMClient):
         tokens_out = (
             int(getattr(usage_obj, "completion_tokens", 0) or 0) if usage_obj else 0
         )
+        cache_read_input_tokens = 0
+        if usage_obj is not None:
+            details = getattr(usage_obj, "prompt_tokens_details", None)
+            if details is not None:
+                try:
+                    cache_read_input_tokens = int(
+                        getattr(details, "cached_tokens", 0) or 0
+                    )
+                except (TypeError, ValueError):
+                    cache_read_input_tokens = 0
         cost = _estimate_cost(model, tokens_in, tokens_out)
 
         response = LLMResponse(
@@ -140,6 +197,7 @@ class OpenRouterClient(LLMClient):
                 cost_usd=cost,
                 model=model,
                 cache_hit=False,
+                cache_read_input_tokens=cache_read_input_tokens,
             ),
         )
         if self._cache is not None:

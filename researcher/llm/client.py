@@ -23,6 +23,7 @@ class LLMUsage(BaseModel):
     cost_usd: float
     model: str
     cache_hit: bool = False
+    cache_read_input_tokens: int = 0  # tokens served from upstream provider prompt cache
 
 
 class LLMResponse(BaseModel):

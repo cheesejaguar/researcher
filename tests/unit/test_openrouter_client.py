@@ -193,3 +193,96 @@ async def test_complete_structured_raises_without_retry():
             schema_retry=False,
         )
     assert len(FakeCls.create_calls) == 1
+
+
+# ---------- prompt caching (cache_control) ----------
+
+
+@pytest.mark.asyncio
+async def test_complete_marks_first_system_message_as_cacheable():
+    """The system message gets cache_control: {type: 'ephemeral'} so providers can cache it."""
+    FakeCls = _fake_openai_cls([_fake_openai_response("ok", 100, 10)])
+    client = OpenRouterClient(api_key="sk-test", async_openai_cls=FakeCls)
+    messages = [
+        {"role": "system", "content": "You are a research agent. Long shared context here."},
+        {"role": "user", "content": "Find entities matching: wars"},
+    ]
+    await client.complete(messages, tier=LLMTier.FAST, task_id="t1")
+
+    sent = FakeCls.create_calls[0]["messages"]
+    assert len(sent) == 2
+    # The system message should have cache_control attached.
+    first = sent[0]
+    assert "cache_control" in first or (
+        isinstance(first.get("content"), list)
+        and first["content"]
+        and "cache_control" in first["content"][0]
+    )
+
+
+@pytest.mark.asyncio
+async def test_prefix_caching_does_not_break_non_cacheable_messages():
+    """User messages should NOT have cache_control attached."""
+    FakeCls = _fake_openai_cls([_fake_openai_response("ok", 100, 10)])
+    client = OpenRouterClient(api_key="sk-test", async_openai_cls=FakeCls)
+    messages = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "user query"},
+    ]
+    await client.complete(messages, tier=LLMTier.FAST, task_id="t1")
+
+    sent = FakeCls.create_calls[0]["messages"]
+    user_msg = sent[1]
+    # The user message's content shouldn't carry cache_control.
+    if isinstance(user_msg.get("content"), list):
+        for part in user_msg["content"]:
+            assert "cache_control" not in part
+    else:
+        assert "cache_control" not in user_msg
+
+
+@pytest.mark.asyncio
+async def test_apply_prompt_caching_does_not_mutate_input():
+    """The helper must not mutate the caller's messages list."""
+    client = OpenRouterClient(api_key="sk-test")
+    messages = [
+        {"role": "system", "content": "shared"},
+        {"role": "user", "content": "ask"},
+    ]
+    snapshot = [dict(m) for m in messages]
+    out = client._apply_prompt_caching(messages)
+    assert messages == snapshot
+    assert out is not messages
+
+
+@pytest.mark.asyncio
+async def test_complete_records_cache_read_input_tokens_when_present():
+    """If the response surfaces prompt_tokens_details.cached_tokens, record it."""
+    resp = _fake_openai_response("ok", 100, 10)
+    details = MagicMock()
+    details.cached_tokens = 80
+    resp.usage.prompt_tokens_details = details
+    FakeCls = _fake_openai_cls([resp])
+    client = OpenRouterClient(api_key="sk-test", async_openai_cls=FakeCls)
+    out = await client.complete(
+        [{"role": "system", "content": "sys"}, {"role": "user", "content": "u"}],
+        tier=LLMTier.FAST,
+        task_id="t1",
+    )
+    assert out.usage.cache_read_input_tokens == 80
+
+
+@pytest.mark.asyncio
+async def test_complete_cache_read_input_tokens_defaults_to_zero():
+    """If the response doesn't surface cached_tokens, default to 0."""
+    resp = _fake_openai_response("ok", 100, 10)
+    # Simulate an older OpenAI/OpenRouter response that omits prompt_tokens_details.
+    resp.usage.prompt_tokens_details = None
+    FakeCls = _fake_openai_cls([resp])
+    client = OpenRouterClient(api_key="sk-test", async_openai_cls=FakeCls)
+    out = await client.complete(
+        [{"role": "system", "content": "sys"}, {"role": "user", "content": "u"}],
+        tier=LLMTier.FAST,
+        task_id="t1",
+    )
+    assert out.usage.cache_read_input_tokens == 0
