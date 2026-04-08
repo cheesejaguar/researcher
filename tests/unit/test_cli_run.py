@@ -1,12 +1,12 @@
 """Tests for the `researcher run` CLI command.
 
 The Wave 1-B wiring constructs a real Orchestrator + DuckDBKnowledgeStore +
-EventBus from a YAML spec. These tests exercise the happy path of the wire-up
-(the graceful-error path, actually — the Wave 1-D native-agent path is not
-yet implemented, so `--backend api` short-circuits into ``StopReason.ERROR``).
-What we verify is that on the path to that graceful error the CLI creates
-the expected artifacts: the run directory, the DuckDB file, and an
-events.jsonl that ends with a `run_complete` envelope.
+EventBus from a YAML spec. These tests exercise the happy path of the wire-up.
+`--backend api` now installs a full NativeAgentDeps bundle (SearchProvider +
+HttpFetcher + PromptRegistry) and chooses between StubLLMClient and
+OpenRouterClient based on whether OPENROUTER_API_KEY is set in the env, so
+the native path runs end-to-end against the stub LLM when no API key is
+configured.
 """
 
 from __future__ import annotations
@@ -60,9 +60,14 @@ def test_run_help_shows_all_flags(cli_runner: CliRunner) -> None:
 
 
 def test_run_creates_run_dir_with_store_and_events(
-    cli_runner: CliRunner, minimal_spec: Path, tmp_path: Path
+    cli_runner: CliRunner, minimal_spec: Path, tmp_path: Path, monkeypatch
 ) -> None:
     from researcher.cli import app
+
+    # Ensure no OPENROUTER_API_KEY / TAVILY_API_KEY so the CLI falls back to
+    # StubLLMClient + FileSeedsProvider on the native path.
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     runs_dir = tmp_path / "runs"
     result = cli_runner.invoke(
@@ -74,19 +79,11 @@ def test_run_creates_run_dir_with_store_and_events(
             str(runs_dir),
             "--run-id",
             "test-run",
-            # Force the api path so we don't depend on CLI detection.
-            # The orchestrator raises NotImplementedError inside _spawn_agent
-            # (Wave 1-D), which the cycle loop catches and turns into
-            # StopReason.ERROR — the artifacts must still exist.
             "--backend",
             "api",
+            "--fast-startup",
         ],
     )
-    # We don't assert exit_code == 0: the orchestrator ends in StopReason.ERROR
-    # because the native agent path isn't built yet, but the CLI itself completes
-    # cleanly (it prints "done reason=error" and returns 0). If anything at the
-    # construction stage blew up, the assertions below would still give us a
-    # useful signal.
     assert result.exit_code == 0, result.output
 
     run_dir = runs_dir / "test-run"
@@ -96,6 +93,37 @@ def test_run_creates_run_dir_with_store_and_events(
     events_path = run_dir / "events.jsonl"
     assert events_path.exists(), "events.jsonl missing"
     content = events_path.read_text()
-    # Every orchestrator run emits exactly one run_complete envelope from
-    # _graceful_stop, regardless of StopReason.
     assert '"type":"run_complete"' in content or '"type": "run_complete"' in content
+
+
+def test_run_uses_openrouter_when_key_set(
+    cli_runner: CliRunner, minimal_spec: Path, tmp_path: Path, monkeypatch
+) -> None:
+    """With OPENROUTER_API_KEY set, the CLI constructs an OpenRouterClient.
+
+    Does NOT make a real API call — the spec has only one seed and the
+    FileSeedsProvider (no TAVILY_API_KEY) returns no URLs, so the LLM is
+    never actually invoked. This test is a wiring smoke check only.
+    """
+    from researcher.cli import app
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-fake-test-key")
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+
+    runs_dir = tmp_path / "runs"
+    result = cli_runner.invoke(
+        app,
+        [
+            "run",
+            str(minimal_spec),
+            "--runs-dir",
+            str(runs_dir),
+            "--run-id",
+            "or-smoke",
+            "--backend",
+            "api",
+            "--fast-startup",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert (runs_dir / "or-smoke" / "events.jsonl").exists()

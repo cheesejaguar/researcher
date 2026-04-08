@@ -187,6 +187,9 @@ async def _execute_run(
     """
     from datetime import datetime
 
+    import os
+
+    from researcher.agents.native_deps import NativeAgentDeps
     from researcher.backends.cli_runner import ClaudeCodeRunner, CodexRunner
     from researcher.backends.models import CliKind
     from researcher.backends.resolver import BackendResolver
@@ -198,10 +201,18 @@ async def _execute_run(
         FactWritten,
         FactWrittenPayload,
     )
+    from researcher.fetch.http import HttpFetcher
+    from researcher.fetch.politeness import PolitenessLimiter
     from researcher.integrations.obsidian import ObsidianWriter
     from researcher.llm.embedder import LocalEmbedder
+    from researcher.llm.openrouter import OpenRouterClient
+    from researcher.llm.prompts import default_registry
+    from researcher.models import LLMTier
     from researcher.orchestrator import Orchestrator
     from researcher.scheduler import Scheduler
+    from researcher.search.base import SearchProvider
+    from researcher.search.file_seeds import FileSeedsProvider
+    from researcher.search.tavily import TavilyProvider
     from researcher.spec import build_entity_class, load_spec
     from researcher.storage.duckdb_store import DuckDBKnowledgeStore
     from researcher.storage.resolver import DefaultEntityResolver
@@ -340,8 +351,18 @@ async def _execute_run(
                 scheduler.restore(sched_data)
                 budget.restore(budget_data)
 
-            # Wave 1-B: stub LLM client. Wave 1-C swaps in an OpenRouter-backed one.
-            llm = StubLLMClient()
+            # LLM client: real OpenRouter when OPENROUTER_API_KEY is set and the
+            # run isn't forced offline; otherwise the deterministic test stub.
+            if offline or not os.environ.get("OPENROUTER_API_KEY"):
+                llm = StubLLMClient()
+            else:
+                llm = OpenRouterClient(
+                    model_map={
+                        LLMTier.FAST: spec_obj.models.get("fast", "anthropic/claude-haiku-4.5"),
+                        LLMTier.SMART: spec_obj.models.get("smart", "anthropic/claude-sonnet-4.6"),
+                        LLMTier.HEAVY: spec_obj.models.get("heavy", "anthropic/claude-opus-4.6"),
+                    },
+                )
 
             # Optional Obsidian sink. CLI flag overrides the spec file.
             obsidian = None
@@ -387,6 +408,29 @@ async def _execute_run(
             )
             orch.set_backend_resolver(backend_resolver)
             orch.set_cli_runner_factory(_runner_factory)
+
+            # Wire NativeAgentDeps when the backend may route to native agents
+            # (backend != "cli"). The native path needs a SearchProvider, an
+            # HttpFetcher, and a PromptRegistry. Tavily is the default provider
+            # when TAVILY_API_KEY is set; fall back to an empty FileSeedsProvider.
+            if backend != "cli":
+                search_provider: SearchProvider
+                if (
+                    spec_obj.search.provider == "tavily"
+                    and os.environ.get(spec_obj.search.api_key_env or "TAVILY_API_KEY")
+                ):
+                    search_provider = TavilyProvider()
+                else:
+                    search_provider = FileSeedsProvider(seeds={})
+
+                http_fetcher = HttpFetcher(politeness=PolitenessLimiter())
+                native_deps = NativeAgentDeps(
+                    search=search_provider,
+                    http=http_fetcher,
+                    prompts=default_registry(),
+                    max_fetch_per_task=3,
+                )
+                orch.set_native_deps(native_deps)
 
             if interactive:
                 from researcher.interrupts import StdinInterruptHandler
