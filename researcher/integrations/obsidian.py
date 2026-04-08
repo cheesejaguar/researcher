@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -196,6 +198,25 @@ def _render_markdown(state: EntityState) -> str:
     return "\n".join(fm_lines) + "\n" + "\n".join(body_parts)
 
 
+def _snapshot_state(state: EntityState) -> EntityState:
+    """Shallow-deep copy of an EntityState for rendering outside the lock."""
+    copied_fields = {
+        name: FieldValue(
+            value=fv.value,
+            confidence=fv.confidence,
+            provenances=list(fv.provenances),
+        )
+        for name, fv in state.fields.items()
+    }
+    return EntityState(
+        entity_type=state.entity_type,
+        entity_name=state.entity_name,
+        fields=copied_fields,
+        run_ids=set(state.run_ids),
+        updated_at=state.updated_at,
+    )
+
+
 # ---------- ObsidianWriter ----------
 
 
@@ -271,8 +292,66 @@ class ObsidianWriter:
             self._debounce_task = None
 
     async def flush(self) -> None:
-        """Placeholder — real implementation in Task 6."""
-        return
+        """Synchronously drain all pending writes to disk.
+
+        Secondary-sink discipline: swallows OSError and logs via stats,
+        never raises (except CancelledError).
+        """
+        async with self._lock:
+            to_write = list(self._dirty)
+            self._dirty.clear()
+        for key in to_write:
+            await self._flush_one(key)
+
+    async def _flush_one(self, key: tuple[str, str]) -> None:
+        async with self._lock:
+            state = self._pending.get(key)
+            if state is None:
+                return
+            snapshot = _snapshot_state(state)
+
+        try:
+            target = self._path_for(snapshot)
+            content = _render_markdown(snapshot)
+            await asyncio.to_thread(self._atomic_write, target, content)
+            self._stats["writes"] += 1
+        except asyncio.CancelledError:
+            raise
+        except OSError as e:
+            self._stats["errors"] += 1
+            try:
+                import logging
+                logging.getLogger("researcher.obsidian").warning(
+                    "obsidian write failed for %s: %s", key, e
+                )
+            except Exception:
+                pass
+
+    def _path_for(self, state: EntityState) -> Path:
+        safe_name = _safe_filename(state.entity_name)
+        if safe_name.startswith("entity_") and state.entity_name:
+            self._stats["sanitized_names"] += 1
+        return self.root_dir / state.entity_type / f"{safe_name}.md"
+
+    def _atomic_write(self, target: Path, content: str) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path_str = tempfile.mkstemp(
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+        )
+        tmp_path = Path(tmp_path_str)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(content)
+            os.replace(tmp_path, target)
+        except OSError:
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
+            raise
 
     async def on_fact(self, claim: FactClaim, run_id: str) -> None:
         """Coalesce a claim into the pending buffer and mark the entity dirty.
@@ -317,6 +396,17 @@ class ObsidianWriter:
             self._dirty.add(key)
 
     async def _debounce_loop(self) -> None:
-        """Placeholder — real implementation in Task 6."""
-        while not self._stopped:
-            await asyncio.sleep(self._flush_interval_s)
+        """Periodically flush dirty entities to disk."""
+        try:
+            while not self._stopped:
+                try:
+                    await asyncio.sleep(self._flush_interval_s)
+                except asyncio.CancelledError:
+                    break
+                if self._dirty:
+                    try:
+                        await self.flush()
+                    except Exception:
+                        self._stats["errors"] += 1
+        except asyncio.CancelledError:
+            pass

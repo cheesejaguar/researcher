@@ -364,3 +364,132 @@ async def test_on_fact_marks_entity_dirty(tmp_path: Path):
         assert ("War", "World War II") in writer._dirty
     finally:
         await writer.stop()
+
+
+# ---------- Flush + debounce + disk writes ----------
+
+import asyncio
+
+
+@pytest.mark.asyncio
+async def test_flush_writes_entity_file_to_disk(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        await writer.on_fact(_sample_claim(), run_id="run-1")
+        await writer.flush()
+        expected = tmp_path / "researcher" / "War" / "World War II.md"
+        assert expected.exists()
+        content = expected.read_text()
+        assert "researcher_type: War" in content
+        assert "start_year: 1939" in content
+    finally:
+        await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_flush_clears_dirty_set(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        await writer.on_fact(_sample_claim(), run_id="run-1")
+        assert writer._dirty
+        await writer.flush()
+        assert not writer._dirty
+    finally:
+        await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_flush_is_idempotent_when_nothing_dirty(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        await writer.flush()
+        await writer.flush()
+        assert writer.stats["writes"] == 0
+    finally:
+        await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_flush_increments_write_count(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        await writer.on_fact(_sample_claim(entity_name="A"), run_id="run-1")
+        await writer.on_fact(_sample_claim(entity_name="B"), run_id="run-1")
+        await writer.flush()
+        assert writer.stats["writes"] == 2
+    finally:
+        await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_debounce_batches_bursts(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path, flush_interval_s=0.05)
+    await writer.start()
+    try:
+        for i in range(10):
+            await writer.on_fact(
+                _sample_claim(field_name=f"f{i}", value=i, span=f"cli_{i}"),
+                run_id="run-1",
+            )
+        await asyncio.sleep(0.15)
+        # 10 claims for the same entity → 1 write.
+        assert writer.stats["writes"] == 1
+    finally:
+        await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_organizes_by_entity_type_subfolder(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    try:
+        await writer.on_fact(
+            _sample_claim(entity_type="War", entity_name="WWII"), run_id="run-1"
+        )
+        await writer.on_fact(
+            _sample_claim(
+                entity_type="Trial",
+                entity_name="NCT12345",
+                field_name="phase",
+                value=3,
+            ),
+            run_id="run-1",
+        )
+        await writer.flush()
+        assert (tmp_path / "researcher" / "War" / "WWII.md").exists()
+        assert (tmp_path / "researcher" / "Trial" / "NCT12345.md").exists()
+    finally:
+        await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_performs_final_flush(tmp_path: Path):
+    writer = ObsidianWriter(vault_path=tmp_path)
+    await writer.start()
+    await writer.on_fact(_sample_claim(), run_id="run-1")
+    await writer.stop()
+    expected = tmp_path / "researcher" / "War" / "World War II.md"
+    assert expected.exists()
+
+
+@pytest.mark.asyncio
+async def test_rerun_overwrites_existing_file(tmp_path: Path):
+    writer1 = ObsidianWriter(vault_path=tmp_path)
+    await writer1.start()
+    await writer1.on_fact(_sample_claim(value=1939), run_id="run-1")
+    await writer1.stop()
+    file_path = tmp_path / "researcher" / "War" / "World War II.md"
+    first_content = file_path.read_text()
+    assert "start_year: 1939" in first_content
+
+    writer2 = ObsidianWriter(vault_path=tmp_path)
+    await writer2.start()
+    await writer2.on_fact(_sample_claim(value=1914), run_id="run-2")
+    await writer2.stop()
+    second_content = file_path.read_text()
+    assert "start_year: 1914" in second_content
+    assert "1939" not in second_content
