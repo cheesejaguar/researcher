@@ -1,14 +1,18 @@
 """VerifyAgent — resolve a conflict between candidate field values.
 
-Wave 1-D native agent. Given a Task with target_entity_id and
-field_hints=[field_name], looks up the matching open conflict, asks the LLM to
-pick the winning value, emits a FactClaim with that value and confidence 0.9,
-and marks the conflict resolved in the store.
+v1.2 Tier-2 upgrade: BoN-MAV (Best-of-N Multi-Aspect Verifier) per arXiv
+2502.20379. Instead of a single LLM call, VerifyAgent.run now fans out three
+parallel aspect verifiers (factual_consistency, source_quality,
+entity_resolution) and majority-votes the winning value. Weak verifiers in
+consensus outperform a single strong verifier by up to 20% on small models.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import time
+from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -18,6 +22,7 @@ from pydantic import BaseModel
 from researcher.agents.base import Agent, EventEmitter
 from researcher.agents.native_deps import NativeAgentDeps
 from researcher.llm.client import LLMClient
+from researcher.llm.prompts import PromptVariant
 from researcher.models import (
     AgentResult,
     AgentState,
@@ -32,6 +37,12 @@ from researcher.storage.store import Conflict, KnowledgeStore
 class _VerifyResponse(BaseModel):
     winning_value: Any = None
     reason: str = ""
+    confidence: float = 0.9
+
+
+def _vote_key(value: Any) -> str:
+    """Hashable key for majority voting; JSON-stringifies unhashable values."""
+    return json.dumps(value, default=str, sort_keys=True)
 
 
 class VerifyAgent(Agent):
@@ -99,48 +110,99 @@ class VerifyAgent(Agent):
         else:
             entity_name = task.target_entity_id
 
-        candidates_text = "\n".join(
-            f"- value={cell.value!r} (confidence={cell.confidence:.2f})"
+        candidates_text = "; ".join(
+            f"value={cell.value!r} (confidence={cell.confidence:.2f})"
             for cell in match.candidates
         )
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a conflict resolver. Given two or more candidate "
-                    "values for the same field, pick the most likely correct "
-                    "one and return it as JSON."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Entity: {entity_name} ({entity_type})\n"
-                    f"Field: {field_name}\n"
-                    f"Candidates:\n{candidates_text}\n\n"
-                    f"Return JSON with winning_value and a short reason."
-                ),
-            },
-        ]
 
-        await self.set_state(AgentState.EXTRACTING)
+        # Resolve the aspect variants from the prompt registry.
         try:
-            response = await self.llm.complete_structured(
-                messages=messages,
-                schema=_VerifyResponse,
-                tier=LLMTier.SMART,
-                task_id=task.id,
-            )
-        except Exception as e:
-            await self.log("error", f"llm verify failed: {e}")
+            verify_set = self._deps.prompts.get_set("verify")
+        except KeyError:
+            await self.log("error", "no verify prompt set registered")
             await self.set_state(AgentState.FAILED)
             return AgentResult(
                 task_id=task.id,
                 agent_id=self.agent_id,
                 state=AgentState.FAILED,
-                error=f"llm_failed: {e}",
+                error="no_verify_prompt_set",
                 wall_ms=int((time.monotonic() - start) * 1000),
             )
+
+        variants: list[PromptVariant] = list(verify_set.variants[:3])
+        if not variants:
+            await self.log("error", "verify prompt set has no variants")
+            await self.set_state(AgentState.FAILED)
+            return AgentResult(
+                task_id=task.id,
+                agent_id=self.agent_id,
+                state=AgentState.FAILED,
+                error="no_verify_variants",
+                wall_ms=int((time.monotonic() - start) * 1000),
+            )
+
+        await self.set_state(AgentState.EXTRACTING)
+
+        async def _run_one_aspect(variant: PromptVariant) -> _VerifyResponse:
+            messages = [
+                {"role": "system", "content": variant.system},
+                {
+                    "role": "user",
+                    "content": variant.user_template.format(
+                        entity_name=entity_name,
+                        field=field_name,
+                        candidates=candidates_text,
+                    ),
+                },
+            ]
+            return await self.llm.complete_structured(
+                messages=messages,
+                schema=_VerifyResponse,
+                tier=LLMTier.SMART,
+                task_id=task.id,
+            )
+
+        aspect_results = await asyncio.gather(
+            *(_run_one_aspect(v) for v in variants),
+            return_exceptions=True,
+        )
+
+        valid_results: list[_VerifyResponse] = []
+        for idx, r in enumerate(aspect_results):
+            if isinstance(r, Exception):
+                await self.log(
+                    "warn",
+                    f"aspect verifier {variants[idx].name} failed: {r}",
+                )
+                continue
+            valid_results.append(r)  # type: ignore[arg-type]
+
+        if not valid_results:
+            await self.log("error", "all aspect verifiers failed")
+            await self.set_state(AgentState.FAILED)
+            return AgentResult(
+                task_id=task.id,
+                agent_id=self.agent_id,
+                state=AgentState.FAILED,
+                error="all_verifiers_failed",
+                wall_ms=int((time.monotonic() - start) * 1000),
+            )
+
+        # Majority vote — stringify values so lists/dicts are hashable.
+        key_counter: Counter[str] = Counter(
+            _vote_key(r.winning_value) for r in valid_results
+        )
+        winning_key, winning_votes = key_counter.most_common(1)[0]
+        winning_value = next(
+            r.winning_value
+            for r in valid_results
+            if _vote_key(r.winning_value) == winning_key
+        )
+        avg_confidence = sum(r.confidence for r in valid_results) / len(valid_results)
+        reason = (
+            f"BoN-MAV majority vote: {winning_votes}/{len(valid_results)} "
+            f"aspects agree"
+        )
 
         # Update the conflict in the store to resolved.
         resolved = Conflict(
@@ -149,19 +211,18 @@ class VerifyAgent(Agent):
             field=match.field,
             candidates=list(match.candidates),
             status="resolved",
-            winning_value=response.winning_value,
-            reason=response.reason,
+            winning_value=winning_value,
+            reason=reason,
         )
         await self.store.record_conflict(resolved)
 
-        # Build the claim — provenance points at the store itself since the
-        # value was chosen, not freshly fetched.
+        # Build the claim — provenance reflects the ensemble decision.
         now = datetime.now(UTC)
         prov = Provenance(
             url=f"native://verify/{match.conflict_id}",
             fetched_at=now,
-            snippet=response.reason or "",
-            extractor_model="native/verify",
+            snippet=reason,
+            extractor_model="native/verify-bon-mav",
             agent_id=self.agent_id,
             task_id=task.id,
             span_id=f"verify_{uuid4().hex[:8]}",
@@ -170,8 +231,8 @@ class VerifyAgent(Agent):
             entity_type=entity_type,
             entity_name=str(entity_name),
             field=field_name,
-            value=response.winning_value,
-            confidence=0.9,
+            value=winning_value,
+            confidence=avg_confidence,
             provenance=prov,
             emitted_by=self.agent_id,
             task_id=task.id,

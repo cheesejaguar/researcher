@@ -48,6 +48,16 @@ class PromptRegistry:
             raise KeyError(f"no prompt set registered for kind={kind!r}")
         return self._sets[kind].pick(self._rng)
 
+    def get_set(self, kind: str) -> PromptSet:
+        """Return the full PromptSet for a kind.
+
+        Used by multi-variant agents (e.g. BoN-MAV VerifyAgent) that need to
+        fan out across every registered variant rather than sample just one.
+        """
+        if kind not in self._sets:
+            raise KeyError(f"no prompt set registered for kind={kind!r}")
+        return self._sets[kind]
+
     def seed(self, seed: int) -> None:
         self._rng = random.Random(seed)
 
@@ -112,16 +122,46 @@ def default_registry() -> PromptRegistry:
             kind="verify",
             variants=[
                 PromptVariant(
-                    name="verify_v1",
+                    name="verify_factual_consistency",
                     system=(
-                        "You are a conflict resolver. Given two or more candidate values "
-                        "for the same field, pick the most likely correct one with reasoning."
+                        "You are a verifier focused on factual_consistency. Given a "
+                        "conflict between candidate values for a field, pick the value "
+                        "that is most consistent with established facts. Return JSON."
                     ),
                     user_template=(
                         "Entity: {entity_name}\n"
                         "Field: {field}\n"
                         "Candidates: {candidates}\n"
-                        "Pick the most authoritative value and explain why in one sentence."
+                        "Pick the most factually consistent value and explain why."
+                    ),
+                ),
+                PromptVariant(
+                    name="verify_source_quality",
+                    system=(
+                        "You are a verifier focused on source_quality. Given a conflict, "
+                        "pick the value backed by the most authoritative source(s). "
+                        "Return JSON."
+                    ),
+                    user_template=(
+                        "Entity: {entity_name}\n"
+                        "Field: {field}\n"
+                        "Candidates: {candidates}\n"
+                        "Pick the value with the most authoritative source citation."
+                    ),
+                ),
+                PromptVariant(
+                    name="verify_entity_resolution",
+                    system=(
+                        "You are a verifier focused on entity_resolution. Given a "
+                        "conflict, determine whether the conflicting values actually "
+                        "refer to the same entity or different ones. If different, "
+                        "flag it. Otherwise pick the canonical value. Return JSON."
+                    ),
+                    user_template=(
+                        "Entity: {entity_name}\n"
+                        "Field: {field}\n"
+                        "Candidates: {candidates}\n"
+                        "Verify these refer to the same entity, then pick the canonical value."
                     ),
                 ),
             ],
