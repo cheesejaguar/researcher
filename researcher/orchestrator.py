@@ -69,6 +69,7 @@ class Orchestrator:
         run_id: str,
         max_parallel_agents: int = 6,
         obsidian_writer: Any = None,  # Optional[ObsidianWriter]; avoid import cycle
+        resume_from: Optional[int] = None,
     ) -> None:
         self._spec = spec
         self._store = store
@@ -79,7 +80,7 @@ class Orchestrator:
         self._budget = budget
         self._run_id = run_id
         self._sem = asyncio.Semaphore(max_parallel_agents)
-        self._cycle = 0
+        self._cycle = resume_from if resume_from is not None else 0
         self._started_at: Optional[datetime] = None
         self._backend_resolver: Optional[BackendResolver] = None
         self._cli_runner_factory: Optional[Callable[[CliKind], CliRunner]] = None
@@ -87,6 +88,7 @@ class Orchestrator:
         self._circuit_break_threshold: int = 3
         self._obsidian_writer = obsidian_writer
         self._native_deps: Optional[NativeAgentDeps] = None
+        self._resume_from = resume_from
 
     def set_backend_resolver(self, resolver: BackendResolver) -> None:
         self._backend_resolver = resolver
@@ -134,7 +136,12 @@ class Orchestrator:
     async def run(self) -> StopReason:
         self._started_at = datetime.now(UTC)
         self._budget.start_wall_clock()
-        await self._scheduler.seed()
+        if self._resume_from is None:
+            # Fresh run — seed the scheduler from spec.
+            await self._scheduler.seed()
+        # On resume the scheduler + budget were restored by the caller
+        # before run() was invoked, so skip seeding to avoid duplicating
+        # the initial DISCOVER tasks.
 
         # Start the writer drain loop for the whole run.
         self._writer.start()
@@ -205,6 +212,10 @@ class Orchestrator:
                 metrics = await self._store.snapshot_metrics()
                 await self._scheduler.update_from_metrics(metrics)
                 await self._emit_cycle_end(metrics)
+
+                # Crash-safe checkpoint: snapshot scheduler + budget state
+                # so a crash here resumes from the next cycle, not cycle 0.
+                await self._save_checkpoint()
 
                 # Stop checks — subagent_cap is highest priority because it's
                 # a hard stop regardless of other state.
@@ -366,6 +377,36 @@ class Orchestrator:
                 ),
             )
         )
+
+    async def _save_checkpoint(self) -> None:
+        """Persist the orchestrator's control state for crash-safe resume.
+
+        Best effort: a checkpoint failure must never crash an in-progress
+        run, since the checkpoint is purely an optimization for restart.
+        Stores that don't implement ``save_checkpoint`` (e.g. the in-memory
+        stub used by some tests) are silently skipped.
+        """
+        if not hasattr(self._store, "save_checkpoint"):
+            return
+        try:
+            data = {
+                "scheduler": self._scheduler.serialize(),
+                "budget": self._budget.serialize(),
+                "cycle": self._cycle,
+                "started_at": (
+                    self._started_at.isoformat()
+                    if self._started_at is not None
+                    else None
+                ),
+            }
+            await self._store.save_checkpoint(  # type: ignore[attr-defined]
+                run_id=self._run_id,
+                cycle=self._cycle,
+                data=data,
+            )
+        except Exception:
+            # Swallow: a corrupt store must never block the run.
+            pass
 
     async def _graceful_stop(self, reason: StopReason) -> None:
         """Drain the writer, write run_summary, emit run_complete.

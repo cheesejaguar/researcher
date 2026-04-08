@@ -118,3 +118,27 @@ class Budget:
 
     def allows_subagent_call(self) -> bool:
         return self._subagent_calls_total < self._max_subagent_calls
+
+    # ---------- Serialize / restore (checkpointing) ----------
+
+    def serialize(self) -> dict:
+        """Snapshot the mutable spend/warn/wall state for checkpointing.
+
+        Caps and warn fractions are NOT serialized — they're recreated
+        from the spec when the orchestrator constructs a fresh Budget on
+        resume. Only the runtime counters that would otherwise reset to
+        zero need to round-trip.
+        """
+        return {
+            "spent": self._spent,
+            "subagent_calls_total": self._subagent_calls_total,
+            "warned": list(self._warned),
+            "wall_started_at": self._wall_started_at,
+        }
+
+    def restore(self, data: dict) -> None:
+        """Re-hydrate the mutable counters from a :meth:`serialize` blob."""
+        self._spent = float(data.get("spent", 0.0))
+        self._subagent_calls_total = int(data.get("subagent_calls_total", 0))
+        self._warned = set(data.get("warned", []))
+        self._wall_started_at = data.get("wall_started_at")

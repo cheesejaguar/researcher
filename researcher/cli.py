@@ -92,18 +92,29 @@ def run(
             "(skips the MiniLM cold-load; intended for tests/CI)."
         ),
     ),
+    resume: str = typer.Option(
+        "",
+        "--resume",
+        help=(
+            "Resume a previous run by id; reuses its DuckDB store and "
+            "continues from the next cycle."
+        ),
+    ),
 ) -> None:
     """Run a research job from a YAML spec against the CLI subagent backend."""
     if backend not in ("auto", "cli", "api"):
         raise typer.BadParameter(f"--backend must be one of auto|cli|api, got {backend!r}")
 
-    actual_run_id = run_id or _generate_run_id(spec)
+    # When resuming, the run_id is dictated by --resume; the existing run
+    # directory must already exist on disk so we can reopen its DuckDB.
+    actual_run_id = resume if resume else (run_id or _generate_run_id(spec))
     run_dir = runs_dir / actual_run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
     typer.echo(
         f"[researcher run] spec={spec} run_id={actual_run_id} "
         f"backend={backend} run_dir={run_dir}"
+        + (f" resume={resume}" if resume else "")
     )
 
     import asyncio as _asyncio
@@ -117,6 +128,7 @@ def run(
             obsidian_vault_override=obsidian_vault,
             offline=offline,
             fast_startup=fast_startup,
+            resume=resume,
         )
     )
     typer.echo(f"[researcher run] done reason={reason.value}")
@@ -130,6 +142,7 @@ async def _execute_run(
     obsidian_vault_override: str,
     offline: bool,
     fast_startup: bool = False,
+    resume: str = "",
 ) -> StopReason:
     """Construct every wire and execute :meth:`Orchestrator.run` once.
 
@@ -179,6 +192,22 @@ async def _execute_run(
     store = DuckDBKnowledgeStore(db_path=db_path)
     await store.open()
     await store.init_schema(entity_class)
+
+    # If resuming, pull the checkpoint blob now so we can restore the
+    # scheduler + budget after they're constructed below.
+    checkpoint_cycle: int | None = None
+    sched_data: dict = {}
+    budget_data: dict = {}
+    if resume:
+        ckpt = await store.load_checkpoint(resume)
+        if ckpt is None:
+            await store.close()
+            raise typer.BadParameter(
+                f"no checkpoint found for run_id={resume!r}"
+            )
+        checkpoint_cycle = int(ckpt["cycle"])
+        sched_data = ckpt["data"].get("scheduler", {})
+        budget_data = ckpt["data"].get("budget", {})
 
     try:
         bus = EventBus(jsonl_path=run_dir / "events.jsonl")
@@ -247,6 +276,11 @@ async def _execute_run(
                 max_subagent_calls=spec_obj.max_subagent_calls,
             )
 
+            # Restore checkpointed state before constructing the Orchestrator.
+            if resume and checkpoint_cycle is not None:
+                scheduler.restore(sched_data)
+                budget.restore(budget_data)
+
             # Wave 1-B: stub LLM client. Wave 1-C swaps in an OpenRouter-backed one.
             llm = StubLLMClient()
 
@@ -290,6 +324,7 @@ async def _execute_run(
                 run_id=run_id,
                 max_parallel_agents=6,
                 obsidian_writer=obsidian,
+                resume_from=checkpoint_cycle,
             )
             orch.set_backend_resolver(backend_resolver)
             orch.set_cli_runner_factory(_runner_factory)

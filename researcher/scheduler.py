@@ -69,6 +69,29 @@ class Scheduler:
         for spawned in result.spawned_tasks:
             self._queue.append(spawned)
 
+    def serialize(self) -> dict:
+        """Snapshot the scheduler's control state for checkpointing.
+
+        Captures the pending task queue, the entity-count history used by
+        plateau detection, and the cycle index. Tasks are dumped via
+        :meth:`pydantic.BaseModel.model_dump` so they round-trip through
+        JSON. Embeddings, store rows, and any other heavy state are NOT
+        included — those live in DuckDB and survive a crash on their own.
+        """
+        return {
+            "cycle": self._cycle,
+            "entity_history": list(self._entity_history),
+            "queue": [t.model_dump(mode="json") for t in self._queue],
+        }
+
+    def restore(self, data: dict) -> None:
+        """Re-hydrate the scheduler from a :meth:`serialize` blob."""
+        self._cycle = int(data.get("cycle", 0))
+        self._entity_history = list(data.get("entity_history", []))
+        self._queue = deque(
+            Task.model_validate(t) for t in data.get("queue", [])
+        )
+
     @property
     def plateau(self) -> bool:
         """True iff the last 2 cycles each added fewer than `plateau_min_new_entities`."""

@@ -192,6 +192,16 @@ class DuckDBKnowledgeStore(KnowledgeStore):
             )
             """
         )
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS run_checkpoints (
+                run_id TEXT PRIMARY KEY,
+                cycle INTEGER NOT NULL,
+                data_json TEXT NOT NULL,
+                saved_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
 
     def _require_conn(self) -> duckdb.DuckDBPyConnection:
         if self._conn is None:
@@ -528,3 +538,40 @@ class DuckDBKnowledgeStore(KnowledgeStore):
                 "INSERT INTO run_summary VALUES (?, ?, ?)",
                 [run_id, _now(), json.dumps(summary)],
             )
+
+    # ---- run checkpoints (crash-safe resume) ----------------------------
+
+    async def save_checkpoint(
+        self, run_id: str, cycle: int, data: dict
+    ) -> None:
+        """Persist (or overwrite) a per-run checkpoint blob.
+
+        The checkpoint stores the orchestrator's small control state (the
+        scheduler queue + entity history, the budget counters, the current
+        cycle index) so a crashed run can resume from where it stopped
+        instead of starting over from cycle zero.
+        """
+        async with self._lock:
+            conn = self._require_conn()
+            blob = json.dumps(data)
+            # Upsert: DELETE then INSERT (DuckDB has no INSERT OR REPLACE).
+            conn.execute(
+                "DELETE FROM run_checkpoints WHERE run_id = ?", [run_id]
+            )
+            conn.execute(
+                "INSERT INTO run_checkpoints (run_id, cycle, data_json) "
+                "VALUES (?, ?, ?)",
+                [run_id, int(cycle), blob],
+            )
+
+    async def load_checkpoint(self, run_id: str) -> Optional[dict]:
+        """Return the most recent checkpoint for a run, or None if absent."""
+        async with self._lock:
+            conn = self._require_conn()
+            row = conn.execute(
+                "SELECT cycle, data_json FROM run_checkpoints WHERE run_id = ?",
+                [run_id],
+            ).fetchone()
+            if row is None:
+                return None
+            return {"cycle": int(row[0]), "data": json.loads(row[1])}
