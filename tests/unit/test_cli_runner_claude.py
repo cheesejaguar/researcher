@@ -321,3 +321,45 @@ async def test_cancellation_during_stdin_write_kills_child():
             await task
 
     proc.kill.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_double_kill_does_not_mask_cancellation():
+    """Reproduce I-6: cancel during wait_for triggers BOTH inner and outer handlers.
+
+    The inner handler kills+reaps the proc; the outer handler then tries to kill
+    again. If proc.kill() raises ProcessLookupError on the second call, it must
+    NOT replace the in-flight CancelledError.
+    """
+    proc = _fake_process()
+
+    # Make wait_for cancellable: communicate sleeps so cancellation lands inside it.
+    async def slow_communicate():
+        await asyncio.sleep(10.0)
+        return (b"", b"")
+
+    proc.communicate = slow_communicate
+
+    # Make the SECOND call to proc.kill() raise ProcessLookupError, like the real OS would.
+    kill_call_count = {"n": 0}
+
+    def kill_with_lookup_error():
+        kill_call_count["n"] += 1
+        if kill_call_count["n"] >= 2:
+            raise ProcessLookupError("[Errno 3] No such process")
+
+    proc.kill = kill_with_lookup_error
+
+    async def fake_exec(*argv, **kwargs):
+        return proc
+
+    runner = ClaudeCodeRunner(model="sonnet")
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+        task = asyncio.create_task(
+            runner.execute(prompt="p", schema=SCHEMA, timeout_s=60)
+        )
+        await asyncio.sleep(0.05)
+        task.cancel()
+        # The exception MUST be CancelledError, not ProcessLookupError.
+        with pytest.raises(asyncio.CancelledError):
+            await task

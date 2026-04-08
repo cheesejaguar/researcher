@@ -43,6 +43,25 @@ def _cache_key(argv: list[str], prompt: str, schema: dict) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
+async def _kill_and_reap(proc: Any) -> None:
+    """Best-effort kill + reap. Swallows ProcessLookupError if the proc is already gone.
+
+    Used by every cleanup site so a double-kill (e.g. inner cancel handler reaps,
+    then outer handler tries again) doesn't mask the in-flight exception with
+    ProcessLookupError.
+    """
+    if proc is None:
+        return
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        pass
+    try:
+        await proc.wait()
+    except Exception:
+        pass
+
+
 class CliRunner(Protocol):
     """Protocol all CLI runners implement."""
 
@@ -162,11 +181,7 @@ class ClaudeCodeRunner:
                     proc.communicate(), timeout=timeout_s
                 )
             except asyncio.TimeoutError:
-                proc.kill()
-                try:
-                    await proc.wait()
-                except Exception:
-                    pass
+                await _kill_and_reap(proc)
                 return CliResult(
                     ok=False,
                     error="timeout",
@@ -174,19 +189,10 @@ class ClaudeCodeRunner:
                     exit_code=None,
                 )
             except asyncio.CancelledError:
-                proc.kill()
-                try:
-                    await proc.wait()
-                except Exception:
-                    pass
+                await _kill_and_reap(proc)
                 raise
         except asyncio.CancelledError:
-            if proc is not None:
-                proc.kill()
-                try:
-                    await proc.wait()
-                except Exception:
-                    pass
+            await _kill_and_reap(proc)
             raise
 
         wall_ms = int((time.monotonic() - start) * 1000)
