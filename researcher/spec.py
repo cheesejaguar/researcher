@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, Field, create_model
@@ -78,6 +78,10 @@ class RunSpec(BaseModel):
     max_entities_per_cycle: int = 200
     max_depth: int = 3
     models: dict[str, str]  # LLMTier value -> OpenRouter model id
+    # Backend policy for CLI subagent offload.
+    backend_policy: Literal["auto", "cli", "api"] = "auto"
+    max_subagent_calls: int = 500
+    subagent_timeout_s: int = 120
 
 
 # ---------- YAML loader ----------

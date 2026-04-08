@@ -26,9 +26,19 @@ def run(
     run_id: str = typer.Option("", "--run-id", help="Custom run id (default: autogen)."),
     no_tui: bool = typer.Option(False, "--no-tui", help="Do not auto-launch the Ink TUI child process."),
     offline: bool = typer.Option(False, "--offline", help="Use stub LLM client + fixture corpus."),
+    backend: str = typer.Option(
+        "auto",
+        "--backend",
+        help="Backend policy: auto (use CLI if detected), cli (force CLI), api (force OpenRouter).",
+    ),
 ) -> None:
     """Run a research job from a YAML spec. Auto-launches the TUI by default."""
-    typer.echo(f"[researcher run] spec={spec} run_id={run_id or 'auto'} tui={'off' if no_tui else 'on'} offline={offline}")
+    if backend not in ("auto", "cli", "api"):
+        raise typer.BadParameter(f"--backend must be one of auto|cli|api, got {backend!r}")
+    typer.echo(
+        f"[researcher run] spec={spec} run_id={run_id or 'auto'} "
+        f"tui={'off' if no_tui else 'on'} offline={offline} backend={backend}"
+    )
     typer.echo("Wave 0 skeleton: orchestrator dispatch lands in Wave 1-E.")
 
 

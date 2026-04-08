@@ -189,3 +189,61 @@ def test_search_config_defaults():
     assert cfg.provider == "tavily"
     assert cfg.api_key_env == "TAVILY_API_KEY"
     assert cfg.max_results == 10
+
+
+# ---------- Backend policy ----------
+
+def test_runspec_backend_policy_default():
+    s = RunSpec(
+        spec_id="x",
+        goal="g",
+        entities=[
+            EntitySpec(
+                name="War",
+                fields=[FieldSpec(name="name", type="str", required=True)],
+                search_templates=[],
+            )
+        ],
+        seeds=["s"],
+        models={"fast": "m"},
+    )
+    assert s.backend_policy == "auto"
+    assert s.max_subagent_calls == 500
+    assert s.subagent_timeout_s == 120
+
+
+def test_runspec_backend_policy_accepts_cli_and_api():
+    for policy in ("auto", "cli", "api"):
+        s = RunSpec(
+            spec_id="x",
+            goal="g",
+            entities=[
+                EntitySpec(
+                    name="War",
+                    fields=[FieldSpec(name="name", type="str", required=True)],
+                    search_templates=[],
+                )
+            ],
+            seeds=["s"],
+            models={"fast": "m"},
+            backend_policy=policy,
+        )
+        assert s.backend_policy == policy
+
+
+def test_runspec_backend_policy_rejects_unknown():
+    with pytest.raises(ValidationError):
+        RunSpec(
+            spec_id="x",
+            goal="g",
+            entities=[
+                EntitySpec(
+                    name="War",
+                    fields=[FieldSpec(name="name", type="str", required=True)],
+                    search_templates=[],
+                )
+            ],
+            seeds=["s"],
+            models={"fast": "m"},
+            backend_policy="banana",  # type: ignore[arg-type]
+        )
