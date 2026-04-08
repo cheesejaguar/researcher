@@ -115,6 +115,16 @@ def run(
         "--interactive",
         help="Pause at declared interrupt points and prompt the user via stdin.",
     ),
+    otel_endpoint: str = typer.Option(
+        "",
+        "--otel-endpoint",
+        help=(
+            "OTLP collector endpoint (e.g. localhost:4317). When set, every "
+            "bus event is also exported as a structured span via the "
+            "opentelemetry-sdk extra. Fail-open: missing deps or import "
+            "errors are logged and the run continues without OTEL."
+        ),
+    ),
 ) -> None:
     """Run a research job from a YAML spec against the CLI subagent backend."""
     if backend not in ("auto", "cli", "api"):
@@ -148,6 +158,7 @@ def run(
             resume=resume,
             mode=mode,
             interactive=interactive,
+            otel_endpoint=otel_endpoint,
         )
     )
     typer.echo(f"[researcher run] done reason={reason.value}")
@@ -164,6 +175,7 @@ async def _execute_run(
     resume: str = "",
     mode: str = "overwrite",
     interactive: bool = False,
+    otel_endpoint: str = "",
 ) -> StopReason:
     """Construct every wire and execute :meth:`Orchestrator.run` once.
 
@@ -233,6 +245,28 @@ async def _execute_run(
     try:
         bus = EventBus(jsonl_path=run_dir / "events.jsonl")
         await bus.start()
+
+        # v1.3 #4: optional OTLP trace export. Fail-open: a missing extra
+        # or a malformed endpoint MUST NOT abort the run.
+        otel_adapter = None
+        if otel_endpoint:
+            try:
+                from researcher.observability.otel import (
+                    OtelEventAdapter,
+                    build_otlp_exporter,
+                )
+
+                exporter = build_otlp_exporter(otel_endpoint)
+                otel_adapter = OtelEventAdapter(exporter, run_id=run_id)
+                otel_adapter.start_run()
+                bus.add_subscriber(otel_adapter.handle)
+                typer.echo(f"[researcher run] otel exporter active endpoint={otel_endpoint}")
+            except Exception as exc:
+                typer.echo(
+                    f"[researcher run] otel disabled: {exc}",
+                    err=True,
+                )
+                otel_adapter = None
 
         try:
             # Wave 1.1: prefer the real LocalEmbedder (sentence-transformers
@@ -364,6 +398,14 @@ async def _execute_run(
             reason = await orch.run()
             return reason
         finally:
+            if otel_adapter is not None:
+                try:
+                    otel_adapter.flush()
+                except Exception as exc:
+                    typer.echo(
+                        f"[researcher run] otel flush error: {exc}",
+                        err=True,
+                    )
             await bus.stop()
     finally:
         await store.close()

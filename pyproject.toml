@@ -33,6 +33,10 @@ dev = [
 pdf = [
     "pymupdf>=1.24",
 ]
+otel = [
+    "opentelemetry-sdk>=1.24",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.24",
+]
 
 [project.scripts]
 researcher = "researcher.__main__:main"

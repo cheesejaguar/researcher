@@ -12,7 +12,7 @@ import asyncio
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any, Literal, Optional
+from typing import Annotated, Any, Callable, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -252,6 +252,23 @@ class EventBus:
         self._dropped = 0
         self._file = None  # type: ignore[assignment]
         self._started = False
+        # v1.3 #4: synchronous sideband subscribers (e.g. OTEL adapter). Each
+        # callback receives the emitted event AFTER the JSONL write and the
+        # socket-queue put. Exceptions inside a subscriber are swallowed and
+        # counted — a buggy sink must NEVER block or crash the core emit path.
+        self._subscribers: list[Callable[[Event], None]] = []
+        self._subscriber_errors: int = 0
+
+    def add_subscriber(self, callback: Callable[[Event], None]) -> None:
+        """Register a synchronous callback invoked after every emit.
+
+        Subscribers are intended for non-critical observers (OTLP
+        exporter, live TUI, etc.). The callback is called synchronously
+        inside :meth:`emit`, so it must be cheap and non-blocking. Any
+        exception raised by a subscriber is caught and counted on
+        ``_subscriber_errors``; it never bubbles to the core.
+        """
+        self._subscribers.append(callback)
 
     async def start(self) -> None:
         self._jsonl_path.parent.mkdir(parents=True, exist_ok=True)
@@ -300,6 +317,13 @@ class EventBus:
             except asyncio.QueueFull:
                 # Extremely degenerate case (concurrent producers) — drop and move on.
                 self._dropped += 1
+
+        # 3) Sideband subscribers (v1.3 #4). Exceptions swallowed + counted.
+        for sub in self._subscribers:
+            try:
+                sub(event)
+            except Exception:
+                self._subscriber_errors += 1
 
     @property
     def socket_queue(self) -> asyncio.Queue:
