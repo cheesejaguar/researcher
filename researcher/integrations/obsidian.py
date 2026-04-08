@@ -8,6 +8,8 @@ orchestrator's primary reduce path. See doc/2026-04-08-obsidian-integration-desi
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,3 +44,37 @@ class EntityState:
     fields: dict[str, FieldValue] = field(default_factory=dict)
     run_ids: set[str] = field(default_factory=set)
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# ---------- Helpers ----------
+
+
+_UNSAFE_CHARS = re.compile(r'[\\/:*?"<>|]')
+_DOT_RUN = re.compile(r"\.{2,}")
+_WHITESPACE_RUN = re.compile(r"\s+")
+_MAX_FILENAME_LEN = 200
+
+
+def _safe_filename(name: str) -> str:
+    """Sanitize an entity name for use as a filename.
+
+    - Strips path separators and Windows-reserved characters.
+    - Collapses whitespace and removes path-traversal dot runs.
+    - Falls back to `entity_<sha1_8>` for empty or all-special names.
+    - Truncates to 200 characters with an 8-char hash suffix for collision safety.
+    """
+    original = name
+    # Kill path-traversal dot runs before anything else so `../` can't survive.
+    cleaned = _DOT_RUN.sub("_", name)
+    cleaned = _UNSAFE_CHARS.sub("_", cleaned)
+    cleaned = _WHITESPACE_RUN.sub(" ", cleaned).strip()
+    # Strip leading/trailing dots (Obsidian hides dotfiles).
+    cleaned = cleaned.strip(".")
+    # Treat all-separator / all-underscore residue as empty so it falls back.
+    if not cleaned or not cleaned.strip("_ "):
+        digest = hashlib.sha1(original.encode("utf-8")).hexdigest()[:8]
+        return f"entity_{digest}"
+    if len(cleaned) > _MAX_FILENAME_LEN:
+        digest = hashlib.sha1(original.encode("utf-8")).hexdigest()[:7]
+        cleaned = cleaned[: _MAX_FILENAME_LEN - 9] + "_" + digest
+    return cleaned
