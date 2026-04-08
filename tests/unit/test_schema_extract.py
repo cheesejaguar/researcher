@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from pydantic import BaseModel
 
 from researcher.extract.schema_extract import extract_structured
@@ -85,3 +86,23 @@ async def test_extract_structured_builds_system_and_user_messages() -> None:
     assert "Entity: Bob" in user
     assert "Bob is a person." in user
     assert "Focus on biographical facts only." in user
+
+
+@pytest.mark.asyncio
+async def test_extract_structured_with_chunk_propagates_span_metadata():
+    """When given a Chunk, extract_structured should return its span metadata for provenance use."""
+    from researcher.extract.chunker import Chunk
+    from researcher.extract.schema_extract import build_provenance_template
+
+    chunk = Chunk(index=2, heading="Background", text="some text", start_char=400, end_char=520)
+    template = build_provenance_template(
+        chunk=chunk,
+        url="https://example.com",
+        agent_id="a1",
+        task_id="t1",
+        extractor_model="test",
+    )
+    assert template["passage_start"] == 400
+    assert template["passage_end"] == 520
+    assert template["chunk_id"] == "chunk_2"
+    assert template["url"] == "https://example.com"

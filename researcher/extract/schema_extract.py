@@ -11,10 +11,43 @@ from typing import TypeVar
 
 from pydantic import BaseModel
 
+from researcher.extract.chunker import Chunk
 from researcher.llm.client import LLMClient
 from researcher.models import LLMTier
 
 T = TypeVar("T", bound=BaseModel)
+
+
+def build_provenance_template(
+    chunk: Chunk | None = None,
+    *,
+    url: str,
+    agent_id: str,
+    task_id: str,
+    extractor_model: str,
+    snippet: str = "",
+    span_id: str = "",
+) -> dict:
+    """Construct a dict suitable for ``Provenance(**template)`` with chunk span metadata.
+
+    The caller fills in ``fetched_at`` and any per-claim ``span_id``; this helper
+    just propagates the chunk's byte offsets and id into the right fields so
+    agents with a Chunk in scope (Discover/Expand) can attach field-level
+    passage-span provenance to their FactClaims (PROV-AGENT, arXiv 2508.02866).
+    """
+    template: dict = {
+        "url": url,
+        "agent_id": agent_id,
+        "task_id": task_id,
+        "extractor_model": extractor_model,
+        "snippet": snippet,
+        "span_id": span_id,
+    }
+    if chunk is not None:
+        template["passage_start"] = chunk.start_char
+        template["passage_end"] = chunk.end_char
+        template["chunk_id"] = f"chunk_{chunk.index}"
+    return template
 
 
 async def extract_structured(

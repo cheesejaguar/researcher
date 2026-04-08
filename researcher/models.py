@@ -37,6 +37,10 @@ class Provenance(BaseModel):
 
     span_id is a character offset / chunk id identifying the specific span of the source;
     it lets a single source contribute multiple (potentially conflicting) values.
+
+    passage_start / passage_end / chunk_id are v1.2 optional byte-offset metadata
+    propagated from the chunker, enabling field-level passage-span provenance
+    (PROV-AGENT, arXiv 2508.02866) without re-fetching the source document.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -48,6 +52,9 @@ class Provenance(BaseModel):
     agent_id: str
     task_id: str
     span_id: str
+    passage_start: Optional[int] = None  # byte offset start in source doc
+    passage_end: Optional[int] = None  # byte offset end
+    chunk_id: Optional[str] = None  # which chunk this came from
 
 
 class Task(BaseModel):

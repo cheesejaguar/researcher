@@ -169,3 +169,48 @@ def test_agent_result_defaults():
     assert r.cost_usd == 0.0
     assert r.wall_ms == 0
     assert r.error is None
+
+
+# ---------- Provenance span fields (v1.2) ----------
+
+
+def test_provenance_passage_span_fields_default_none():
+    p = _sample_provenance()
+    assert p.passage_start is None
+    assert p.passage_end is None
+    assert p.chunk_id is None
+
+
+def test_provenance_passage_span_fields_set():
+    from datetime import UTC, datetime
+    p = Provenance(
+        url="https://example.com",
+        fetched_at=datetime.now(UTC),
+        snippet="test",
+        extractor_model="test",
+        agent_id="a1",
+        task_id="t1",
+        span_id="s0",
+        passage_start=100,
+        passage_end=250,
+        chunk_id="chunk_3",
+    )
+    assert p.passage_start == 100
+    assert p.passage_end == 250
+    assert p.chunk_id == "chunk_3"
+
+
+def test_provenance_is_still_frozen_with_new_fields():
+    p = Provenance(
+        url="https://example.com",
+        fetched_at=datetime(2026, 4, 8, 12, 0, tzinfo=UTC),
+        snippet="x",
+        extractor_model="m",
+        agent_id="a",
+        task_id="t",
+        span_id="s",
+        passage_start=0,
+        passage_end=10,
+    )
+    with pytest.raises(ValidationError):
+        p.passage_start = 999  # type: ignore[misc]
