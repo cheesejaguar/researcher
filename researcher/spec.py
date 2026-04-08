@@ -100,6 +100,13 @@ class RunSpec(BaseModel):
     # at each named point and consults the registered InterruptHandler for
     # a decision. Known points: "after_initial_seed", "after_cycle_end".
     interrupt_points: list[str] = Field(default_factory=list)
+    # v1.2: bounded conditional revision on objective signals.
+    # When True, the orchestrator re-dispatches a task exactly once per run
+    # if its AgentResult carries ``needs_revision=True`` (e.g. empty
+    # extraction, schema failure, sub-threshold confidence). Strictly opt-in
+    # — defaults to False to preserve existing behavior. The revision is
+    # cost-bounded by construction: at most one extra dispatch per task.
+    enable_conditional_revision: bool = False
     # Cross-run accumulation policy:
     #   "overwrite" — each run resets entity state (legacy behavior).
     #   "merge"     — fields accumulate across runs with conflict-aware

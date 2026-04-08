@@ -102,3 +102,9 @@ class AgentResult(BaseModel):
     cost_usd: float = 0.0
     wall_ms: int = 0
     error: Optional[str] = None
+    # v1.2: objective-signal flag for bounded conditional revision.
+    # Agents set this to True when a deterministic signal (empty
+    # extraction, schema failure, sub-threshold confidence) suggests a
+    # single re-dispatch would help. The orchestrator honors it at most
+    # once per task and only when ``RunSpec.enable_conditional_revision``.
+    needs_revision: bool = False

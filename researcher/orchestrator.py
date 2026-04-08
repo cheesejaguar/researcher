@@ -256,6 +256,7 @@ class Orchestrator:
 
                 subagent_cap_hit = False
                 saw_real_exception = False
+                to_revise: list[Task] = []
                 for t, r in zip(batch, results, strict=False):
                     if isinstance(r, Exception):
                         saw_real_exception = True
@@ -275,6 +276,18 @@ class Orchestrator:
                                 )
                             except Exception:
                                 pass
+                    # v1.2: collect tasks tagged for bounded conditional
+                    # revision. Opt-in via spec flag; capped at one retry
+                    # per task by requiring ``attempt == 0``.
+                    if (
+                        self._spec.enable_conditional_revision
+                        and getattr(r, "needs_revision", False)
+                        and t.attempt == 0
+                    ):
+                        self._budget.record_revision()
+                        to_revise.append(
+                            t.model_copy(update={"attempt": t.attempt + 1})
+                        )
                     # Record failures for circuit-break counter + detect subagent_cap.
                     if r.state == AgentState.FAILED and r.error:
                         if r.error == "subagent_cap":
@@ -286,6 +299,36 @@ class Orchestrator:
                 if saw_real_exception:
                     reason = StopReason.ERROR
                     break
+
+                # v1.2: bounded conditional revision.
+                # Re-dispatch tagged tasks exactly once within the same
+                # cycle. Cost is bounded by construction: at most one
+                # extra dispatch per task per run.
+                if to_revise:
+                    revision_results = await asyncio.gather(
+                        *(self._spawn_agent(t) for t in to_revise),
+                        return_exceptions=True,
+                    )
+                    for r in revision_results:
+                        if isinstance(r, Exception):
+                            continue
+                        for claim in r.claims:
+                            try:
+                                await self._writer.submit(claim)
+                            except asyncio.QueueFull:
+                                pass
+                            if self._obsidian_writer is not None:
+                                try:
+                                    await self._obsidian_writer.on_fact(
+                                        claim, run_id=self._run_id
+                                    )
+                                except Exception:
+                                    pass
+                        if r.state == AgentState.FAILED and r.error:
+                            if r.error == "subagent_cap":
+                                subagent_cap_hit = True
+                            else:
+                                self._record_subagent_failure(r.error)
 
                 # Serial reduce: wait for this cycle's claims to process.
                 await self._writer.quiesce()

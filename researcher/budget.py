@@ -42,6 +42,8 @@ class Budget:
         self._wall_started_at: Optional[float] = None
         self._max_subagent_calls = max_subagent_calls
         self._subagent_calls_total = 0
+        # v1.2: bounded conditional revisions counter.
+        self._revisions_total: int = 0
 
     # ---------- Spend tracking ----------
 
@@ -142,6 +144,20 @@ class Budget:
     def allows_subagent_call(self) -> bool:
         return self._subagent_calls_total < self._max_subagent_calls
 
+    # ---------- Revisions (v1.2 conditional revision) ----------
+
+    @property
+    def revisions_total(self) -> int:
+        return self._revisions_total
+
+    def record_revision(self) -> None:
+        """Note that a task was re-dispatched via conditional revision.
+
+        Called by the orchestrator exactly once per re-dispatched task —
+        the cap (at most 1 revision per task) is enforced by the caller.
+        """
+        self._revisions_total += 1
+
     # ---------- Serialize / restore (checkpointing) ----------
 
     def serialize(self) -> dict:
@@ -157,6 +173,7 @@ class Budget:
             "subagent_calls_total": self._subagent_calls_total,
             "warned": list(self._warned),
             "wall_started_at": self._wall_started_at,
+            "revisions_total": self._revisions_total,
         }
 
     def restore(self, data: dict) -> None:
@@ -165,3 +182,4 @@ class Budget:
         self._subagent_calls_total = int(data.get("subagent_calls_total", 0))
         self._warned = set(data.get("warned", []))
         self._wall_started_at = data.get("wall_started_at")
+        self._revisions_total = int(data.get("revisions_total", 0))

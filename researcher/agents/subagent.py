@@ -126,6 +126,14 @@ class SubagentResearcher(Agent):
         tokens_in = int(usage.get("input_tokens", 0) or 0)
         tokens_out = int(usage.get("output_tokens", 0) or 0)
 
+        # v1.2: objective-signal revision flag.
+        # Empty extractions on the first attempt are a deterministic signal
+        # that one targeted re-dispatch may recover the task. We set the
+        # flag unconditionally here — the orchestrator decides whether to
+        # honor it based on ``RunSpec.enable_conditional_revision`` and
+        # enforces the one-retry cap via ``task.attempt``.
+        needs_revision = task.attempt == 0 and len(claims) == 0
+
         await self.set_state(AgentState.DONE)
         return AgentResult(
             task_id=task.id,
@@ -136,6 +144,7 @@ class SubagentResearcher(Agent):
             tokens_out=tokens_out,
             cost_usd=0.0,
             wall_ms=wall_ms,
+            needs_revision=needs_revision,
         )
 
     def _build_prompt(self, task: Task) -> str:
