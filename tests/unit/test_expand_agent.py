@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from pydantic import BaseModel
 
 from researcher.agents.expand import ExpandAgent
 from researcher.agents.native_deps import NativeAgentDeps
@@ -15,7 +14,6 @@ from researcher.fetch.http import FetchResult
 from researcher.llm.prompts import default_registry
 from researcher.models import AgentState, Task, TaskKind
 from researcher.search.base import SearchResult
-from researcher.storage.store import FieldCell
 from tests.stubs.bus import StubEventBus
 from tests.stubs.llm import StubLLMClient
 from tests.stubs.store import StubKnowledgeStore
@@ -40,7 +38,7 @@ def _make_task(target_id: str, field_hints: list[str] | None = None) -> Task:
         target_entity_id=target_id,
         field_hints=field_hints or ["start_year", "end_year"],
         budget_usd=0.01,
-        deadline_ts=datetime.now(timezone.utc) + timedelta(minutes=5),
+        deadline_ts=datetime.now(UTC) + timedelta(minutes=5),
     )
 
 

@@ -15,7 +15,6 @@ from typing import Any, Literal, Optional
 import yaml
 from pydantic import BaseModel, Field, create_model
 
-
 # ---------- Supported field types ----------
 
 # Mapping from the YAML type string to a (python_type, default) pair used by

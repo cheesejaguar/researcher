@@ -13,7 +13,7 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -45,7 +45,7 @@ class EntityState:
     entity_name: str
     fields: dict[str, FieldValue] = field(default_factory=dict)
     run_ids: set[str] = field(default_factory=set)
-    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 # ---------- Helpers ----------
@@ -373,7 +373,7 @@ class ObsidianWriter:
                 self._pending[key] = state
 
             state.run_ids.add(run_id)
-            state.updated_at = datetime.now(timezone.utc)
+            state.updated_at = datetime.now(UTC)
 
             existing = state.fields.get(claim.field)
             if existing is None:

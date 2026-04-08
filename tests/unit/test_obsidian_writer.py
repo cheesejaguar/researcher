@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from researcher.integrations.obsidian import _safe_filename
 
-
 # ---------- Filename sanitization ----------
 
 
@@ -51,7 +50,7 @@ def test_safe_filename_strips_leading_dots():
 
 # ---------- Markdown rendering ----------
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from researcher.integrations.obsidian import (
     EntityState,
@@ -64,7 +63,7 @@ from researcher.models import Provenance
 def _sample_provenance(url: str = "https://example.com", span: str = "cli_0") -> Provenance:
     return Provenance(
         url=url,
-        fetched_at=datetime(2026, 4, 8, 14, 23, 0, tzinfo=timezone.utc),
+        fetched_at=datetime(2026, 4, 8, 14, 23, 0, tzinfo=UTC),
         snippet="began in 1939",
         extractor_model="claude_code/unknown",
         agent_id="sub-a1b2c3d4",
@@ -77,7 +76,7 @@ def _sample_state() -> EntityState:
     state = EntityState(
         entity_type="War",
         entity_name="World War II",
-        updated_at=datetime(2026, 4, 8, 14, 23, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 8, 14, 23, 0, tzinfo=UTC),
     )
     state.run_ids.add("run-2026-04-08-wars-1")
     state.fields["start_year"] = FieldValue(
@@ -214,7 +213,6 @@ async def test_stats_initially_zero(tmp_path: Path):
 
 # ---------- on_fact + coalescing ----------
 
-from datetime import timedelta
 from typing import Any as _Any
 
 from researcher.models import FactClaim
@@ -237,7 +235,7 @@ def _sample_claim(
         confidence=confidence,
         provenance=Provenance(
             url=url,
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
             snippet=f"{field_name}={value}",
             extractor_model="claude_code/unknown",
             agent_id="sub-1",

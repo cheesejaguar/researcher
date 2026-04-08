@@ -1,6 +1,6 @@
 """Tests for researcher.models — the core Pydantic data types."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -14,7 +14,6 @@ from researcher.models import (
     Task,
     TaskKind,
 )
-
 
 # ---------- Enums ----------
 
@@ -42,7 +41,7 @@ def test_llm_tier_values():
 def _sample_provenance() -> Provenance:
     return Provenance(
         url="https://example.com/a",
-        fetched_at=datetime(2026, 4, 8, 12, 0, tzinfo=timezone.utc),
+        fetched_at=datetime(2026, 4, 8, 12, 0, tzinfo=UTC),
         snippet="the sample says hello",
         extractor_model="openrouter/hermes-3-8b",
         agent_id="agent-1",
@@ -62,7 +61,7 @@ def test_provenance_requires_span_id():
     with pytest.raises(ValidationError):
         Provenance(
             url="https://example.com/a",
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
             snippet="s",
             extractor_model="m",
             agent_id="a",
@@ -73,7 +72,7 @@ def test_provenance_requires_span_id():
 # ---------- Task ----------
 
 def test_task_defaults():
-    deadline = datetime(2026, 4, 8, 13, 0, tzinfo=timezone.utc)
+    deadline = datetime(2026, 4, 8, 13, 0, tzinfo=UTC)
     t = Task(
         kind=TaskKind.DISCOVER,
         spec_ref="specs/wars.yaml",
@@ -92,7 +91,7 @@ def test_task_defaults():
 
 
 def test_task_ids_are_unique():
-    deadline = datetime.now(timezone.utc)
+    deadline = datetime.now(UTC)
     a = Task(kind=TaskKind.DISCOVER, spec_ref="s", budget_usd=0.01, deadline_ts=deadline)
     b = Task(kind=TaskKind.DISCOVER, spec_ref="s", budget_usd=0.01, deadline_ts=deadline)
     assert a.id != b.id

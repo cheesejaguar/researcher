@@ -9,7 +9,7 @@ entity's `name` field.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -145,7 +145,7 @@ class DiscoverAgent(Agent):
             )
 
         claims: list[FactClaim] = []
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         primary_url, primary_snippet = fetched[0]
         for name in response.entities:
             name = (name or "").strip()

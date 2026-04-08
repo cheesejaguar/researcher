@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from researcher.backends.models import CliResult, Extraction, SubagentResponse
+from researcher.backends.models import CliResult, SubagentResponse
 
 
 def _hash_prompt(prompt: str) -> str:

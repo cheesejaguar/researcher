@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -31,7 +31,7 @@ def _enrich_task(entity_id: str) -> Task:
         spec_ref="wars",
         target_entity_id=entity_id,
         budget_usd=0.01,
-        deadline_ts=datetime.now(timezone.utc) + timedelta(minutes=5),
+        deadline_ts=datetime.now(UTC) + timedelta(minutes=5),
     )
 
 
@@ -114,7 +114,7 @@ async def test_enrich_entity_not_found_returns_empty_spawned() -> None:
         spec_ref="wars",
         target_entity_id="nope",
         budget_usd=0.01,
-        deadline_ts=datetime.now(timezone.utc) + timedelta(minutes=5),
+        deadline_ts=datetime.now(UTC) + timedelta(minutes=5),
     )
     result = await agent.run(task)
 

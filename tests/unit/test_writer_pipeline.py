@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -16,7 +16,6 @@ from researcher.storage.writer import (
     score_confidence,
     validate_type,
 )
-
 
 WAR_SCHEMA = {
     "entity_type": "War",
@@ -33,7 +32,7 @@ WAR_SCHEMA = {
 def _prov(url: str = "https://example.com", span: str = "s0") -> Provenance:
     return Provenance(
         url=url,
-        fetched_at=datetime.now(timezone.utc),
+        fetched_at=datetime.now(UTC),
         snippet="snippet",
         extractor_model="test",
         agent_id="a1",
@@ -150,7 +149,7 @@ async def test_detect_conflict_same_value_returns_empty(tmp_path):
             value=1939,
             confidence=0.9,
             provenance_ids=[],
-            updated_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(UTC),
         )
         await store.upsert_entity("War", "WWII", {"start_year": existing_cell})
         result = await detect_conflict(_claim("start_year", 1939), store)
@@ -168,7 +167,7 @@ async def test_detect_conflict_different_value_returns_existing_cell(tmp_path):
             value=1939,
             confidence=0.9,
             provenance_ids=[],
-            updated_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(UTC),
         )
         await store.upsert_entity("War", "WWII", {"start_year": existing_cell})
         result = await detect_conflict(_claim("start_year", 1940), store)
@@ -279,7 +278,7 @@ async def test_writer_records_conflict_when_value_differs(tmp_path):
             value=1939,
             confidence=0.9,
             provenance_ids=[],
-            updated_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(UTC),
         )
         await store.upsert_entity("War", "WWII", {"start_year": existing_cell})
 

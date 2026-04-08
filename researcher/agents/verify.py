@@ -9,7 +9,7 @@ and marks the conflict resolved in the store.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -156,7 +156,7 @@ class VerifyAgent(Agent):
 
         # Build the claim — provenance points at the store itself since the
         # value was chosen, not freshly fetched.
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         prov = Provenance(
             url=f"native://verify/{match.conflict_id}",
             fetched_at=now,

@@ -19,10 +19,15 @@ Cycle loop:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Callable, Optional
 
+from researcher.agents.native_deps import NativeAgentDeps
+from researcher.agents.subagent import SubagentResearcher
+from researcher.backends.cli_runner import CliRunner
+from researcher.backends.models import BackendChoice, CliKind
+from researcher.backends.resolver import BackendResolver
 from researcher.budget import Budget, BudgetExceededError
 from researcher.events import (
     CycleEnd,
@@ -33,17 +38,12 @@ from researcher.events import (
     RunComplete,
     RunCompletePayload,
 )
-from researcher.agents.native_deps import NativeAgentDeps
-from researcher.agents.subagent import SubagentResearcher
 from researcher.llm.client import LLMClient
-from researcher.models import AgentResult, AgentState, FactClaim, Task, TaskKind
+from researcher.models import AgentResult, AgentState, Task, TaskKind
 from researcher.scheduler import Scheduler
 from researcher.spec import RunSpec
 from researcher.storage.store import KnowledgeStore
 from researcher.storage.writer import FactWriter
-from researcher.backends.cli_runner import CliRunner
-from researcher.backends.models import BackendChoice, CliKind
-from researcher.backends.resolver import BackendResolver
 
 
 class StopReason(str, Enum):
@@ -132,7 +132,7 @@ class Orchestrator:
         self._cycle_subagent_failures = 0
 
     async def run(self) -> StopReason:
-        self._started_at = datetime.now(timezone.utc)
+        self._started_at = datetime.now(UTC)
         self._budget.start_wall_clock()
         await self._scheduler.seed()
 
@@ -162,7 +162,7 @@ class Orchestrator:
 
                 subagent_cap_hit = False
                 saw_real_exception = False
-                for t, r in zip(batch, results):
+                for t, r in zip(batch, results, strict=False):
                     if isinstance(r, Exception):
                         saw_real_exception = True
                         continue
@@ -346,7 +346,7 @@ class Orchestrator:
         await self._bus.emit(
             CycleStart(
                 seq=0,
-                ts=datetime.now(timezone.utc),
+                ts=datetime.now(UTC),
                 run_id=self._run_id,
                 payload=CycleStartPayload(cycle=self._cycle, pending_tasks=pending),
             )
@@ -356,7 +356,7 @@ class Orchestrator:
         await self._bus.emit(
             CycleEnd(
                 seq=0,
-                ts=datetime.now(timezone.utc),
+                ts=datetime.now(UTC),
                 run_id=self._run_id,
                 payload=CycleEndPayload(
                     cycle=self._cycle,
@@ -380,12 +380,12 @@ class Orchestrator:
 
         wall_s = 0.0
         if self._started_at is not None:
-            wall_s = (datetime.now(timezone.utc) - self._started_at).total_seconds()
+            wall_s = (datetime.now(UTC) - self._started_at).total_seconds()
 
         await self._bus.emit(
             RunComplete(
                 seq=0,
-                ts=datetime.now(timezone.utc),
+                ts=datetime.now(UTC),
                 run_id=self._run_id,
                 payload=RunCompletePayload(
                     reason=reason.value,  # type: ignore[arg-type]

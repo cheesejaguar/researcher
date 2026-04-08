@@ -1,7 +1,7 @@
 """Tests for the SubagentCall event."""
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from researcher.events import (
     SubagentCall,
@@ -11,7 +11,7 @@ from researcher.events import (
 
 
 def _ts() -> datetime:
-    return datetime(2026, 4, 8, 12, 0, tzinfo=timezone.utc)
+    return datetime(2026, 4, 8, 12, 0, tzinfo=UTC)
 
 
 def test_subagent_call_has_type_discriminator():

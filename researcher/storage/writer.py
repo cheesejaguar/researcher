@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable, Optional
 from uuid import uuid4
 
@@ -326,7 +326,7 @@ class FactWriter:
             value=claim.value,
             confidence=float(claim.confidence),
             provenance_ids=[prov_id],
-            updated_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(UTC),
         )
 
         try:
@@ -361,7 +361,7 @@ class FactWriter:
             value=claim.value,
             confidence=float(claim.confidence),
             provenance_ids=[],
-            updated_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(UTC),
         )
 
         # Look up the entity id so the conflict row references the right row.

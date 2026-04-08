@@ -27,7 +27,6 @@ from pydantic import ValidationError
 from researcher.backends.disk_cache import DiskCache
 from researcher.backends.models import CliResult, SubagentResponse
 
-
 # Patterns that indicate auth or usage-limit errors in CLI stderr.
 _AUTH_PATTERNS = ("please run: claude auth", "not signed in", "please log in", "codex login")
 _USAGE_LIMIT_PATTERNS = ("rate_limit", "usage_limit", "quota", "monthly limit")
@@ -198,7 +197,7 @@ class ClaudeCodeRunner:
                 stdout, stderr = await asyncio.wait_for(
                     proc.communicate(), timeout=timeout_s
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 await _kill_and_reap(proc)
                 return CliResult(
                     ok=False,
@@ -418,7 +417,7 @@ class CodexRunner:
                 stdout, stderr = await asyncio.wait_for(
                     proc.communicate(), timeout=timeout_s
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 await _kill_and_reap(proc)
                 return CliResult(
                     ok=False,

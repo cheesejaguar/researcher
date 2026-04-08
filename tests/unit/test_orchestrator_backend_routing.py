@@ -1,19 +1,19 @@
 """Tests for Orchestrator._pick_agent_for_task — backend routing logic."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from researcher.backends.models import BackendChoice, CliKind
+from researcher.backends.models import CliKind
 from researcher.backends.resolver import BackendResolver
 from researcher.budget import Budget
-from researcher.models import AgentResult, AgentState, Task, TaskKind
+from researcher.models import Task, TaskKind
 from researcher.orchestrator import Orchestrator, StopReason
 from researcher.scheduler import Scheduler
 from researcher.spec import EntitySpec, FieldSpec, RunSpec
 from researcher.storage.writer import FactWriter
 from tests.stubs.bus import StubEventBus
-from tests.stubs.cli_runner import StubCliRunner, make_wars_discover_result
+from tests.stubs.cli_runner import StubCliRunner
 from tests.stubs.llm import StubLLMClient
 from tests.stubs.resolver import StubEntityResolver
 from tests.stubs.store import StubKnowledgeStore
@@ -97,7 +97,7 @@ def _sample_task() -> Task:
         spec_ref="wars",
         seed_query="wars",
         budget_usd=0.01,
-        deadline_ts=datetime.now(timezone.utc) + timedelta(minutes=5),
+        deadline_ts=datetime.now(UTC) + timedelta(minutes=5),
     )
 
 

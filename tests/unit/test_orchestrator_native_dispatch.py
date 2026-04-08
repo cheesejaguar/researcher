@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -12,7 +11,6 @@ from researcher.backends.resolver import BackendResolver
 from researcher.budget import Budget
 from researcher.fetch.http import FetchResult
 from researcher.llm.prompts import default_registry
-from researcher.models import AgentResult, AgentState, Task, TaskKind
 from researcher.orchestrator import Orchestrator, StopReason
 from researcher.scheduler import Scheduler
 from researcher.search.base import SearchResult

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from researcher.agents.base import Agent, EventEmitter
@@ -90,7 +90,7 @@ class SubagentResearcher(Agent):
         await self._emit(
             SubagentCall(
                 seq=0,
-                ts=datetime.now(timezone.utc),
+                ts=datetime.now(UTC),
                 run_id=self._run_id,
                 payload=SubagentCallPayload(
                     agent_id=self.agent_id,
@@ -156,7 +156,7 @@ class SubagentResearcher(Agent):
         return f"{SYSTEM_PROMPT}\n\n{user_prompt}"
 
     def _build_claims(self, task: Task, response: SubagentResponse) -> list[FactClaim]:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         entity_type = self._entity_schema.get("entity_type", "Entity")
         extractor_model = f"{self._cli_kind.value}/unknown"
         claims: list[FactClaim] = []
@@ -189,7 +189,7 @@ class SubagentResearcher(Agent):
         await self._emit(
             AgentLog(
                 seq=0,
-                ts=datetime.now(timezone.utc),
+                ts=datetime.now(UTC),
                 run_id=self._run_id,
                 payload=AgentLogPayload(agent_id=self.agent_id, level="info", msg=msg),
             )
@@ -199,7 +199,7 @@ class SubagentResearcher(Agent):
         await self._emit(
             AgentLog(
                 seq=0,
-                ts=datetime.now(timezone.utc),
+                ts=datetime.now(UTC),
                 run_id=self._run_id,
                 payload=AgentLogPayload(agent_id=self.agent_id, level="error", msg=msg),
             )

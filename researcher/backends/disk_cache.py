@@ -19,7 +19,6 @@ from typing import Any, Optional
 
 from researcher.backends.models import CliResult
 
-
 _VERSION = 1
 
 
@@ -128,7 +127,7 @@ class DiskCache:
         if not self._path.exists():
             return
         try:
-            with open(self._path, "r", encoding="utf-8") as fh:
+            with open(self._path, encoding="utf-8") as fh:
                 try:
                     fcntl.flock(fh.fileno(), fcntl.LOCK_SH)
                 except OSError:

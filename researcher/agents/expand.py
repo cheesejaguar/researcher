@@ -9,7 +9,7 @@ FactClaim per populated field.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -29,7 +29,6 @@ from researcher.models import (
     Task,
 )
 from researcher.storage.store import KnowledgeStore
-
 
 _TYPE_MAP: dict[str, type] = {
     "str": str,
@@ -192,7 +191,7 @@ class ExpandAgent(Agent):
             )
 
         claims: list[FactClaim] = []
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         primary_url = fetched[0][0] if fetched else "native://no-source"
         primary_snippet = fetched[0][1][:500] if fetched else ""
 

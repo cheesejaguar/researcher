@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -26,7 +26,7 @@ def _sample_task() -> Task:
         spec_ref="wars",
         seed_query="major wars since 1500",
         budget_usd=0.01,
-        deadline_ts=datetime.now(timezone.utc) + timedelta(minutes=5),
+        deadline_ts=datetime.now(UTC) + timedelta(minutes=5),
     )
 
 
@@ -72,7 +72,6 @@ def _make_deps(
 
 def _make_llm_returning(entities: list[str]) -> Any:
     llm = StubLLMClient()
-    original = llm.complete_structured
 
     async def fake_structured(messages, schema, tier, task_id, temperature=0.0, schema_retry=True):
         return schema(entities=entities)

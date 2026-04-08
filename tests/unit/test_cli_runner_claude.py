@@ -9,7 +9,6 @@ import pytest
 from researcher.backends.cli_runner import ClaudeCodeRunner
 from researcher.backends.models import SubagentResponse
 
-
 SCHEMA = SubagentResponse.model_json_schema()
 
 
@@ -129,7 +128,7 @@ async def test_timeout_kills_child_and_returns_failure():
     proc = _fake_process()
 
     async def fake_communicate():
-        raise asyncio.TimeoutError()
+        raise TimeoutError()
 
     proc.communicate = fake_communicate
 

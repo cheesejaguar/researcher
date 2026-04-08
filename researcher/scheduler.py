@@ -8,7 +8,7 @@ the seeding logic with planner-agent output and tunes the plateau thresholds.
 from __future__ import annotations
 
 from collections import deque
-from typing import Deque
+from datetime import UTC
 
 from researcher.models import AgentResult, Task, TaskKind
 from researcher.spec import RunSpec
@@ -26,16 +26,16 @@ class Scheduler:
     ) -> None:
         self._spec = spec
         self._store = store
-        self._queue: Deque[Task] = deque()
+        self._queue: deque[Task] = deque()
         self._entity_history: list[int] = []  # entity count per cycle
         self._plateau_min = plateau_min_new_entities
         self._cycle = 0
 
     async def seed(self) -> list[Task]:
         """Turn spec.seeds into initial DISCOVER tasks."""
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
-        deadline = datetime.now(timezone.utc) + timedelta(seconds=self._spec.wall_limit_s)
+        deadline = datetime.now(UTC) + timedelta(seconds=self._spec.wall_limit_s)
         per_task_budget = self._spec.budget_usd / max(len(self._spec.seeds), 1) / 10
         tasks: list[Task] = []
         for seed in self._spec.seeds:

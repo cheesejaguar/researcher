@@ -1,6 +1,5 @@
 """Tests that ClaudeCodeRunner and CodexRunner use the cross-run DiskCache."""
 
-import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,7 +8,6 @@ import pytest
 
 from researcher.backends.cli_runner import ClaudeCodeRunner, CodexRunner
 from researcher.backends.models import SubagentResponse
-
 
 SCHEMA = SubagentResponse.model_json_schema()
 

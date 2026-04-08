@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Optional
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -21,7 +21,7 @@ from researcher.storage.store import (
 def _cosine(a: list[float], b: list[float]) -> float:
     if not a or not b:
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     if na == 0 or nb == 0:
@@ -54,7 +54,7 @@ class StubKnowledgeStore(KnowledgeStore):
         # Match by name within type, else create.
         for eid, ent in self._entities.items():
             if ent.type == entity_type and ent.fields.get("name", FieldCell(
-                value="", confidence=0, provenance_ids=[], updated_at=datetime.now(timezone.utc)
+                value="", confidence=0, provenance_ids=[], updated_at=datetime.now(UTC)
             )).value == name:
                 ent.fields.update(fields)
                 return eid
@@ -63,7 +63,7 @@ class StubKnowledgeStore(KnowledgeStore):
             value=name,
             confidence=1.0,
             provenance_ids=[],
-            updated_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(UTC),
         )
         merged = {"name": name_cell, **fields}
         self._entities[eid] = Entity(id=eid, type=entity_type, fields=merged)

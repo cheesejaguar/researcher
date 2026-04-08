@@ -16,7 +16,6 @@ from researcher.llm.cost_tracker import SimpleCostTracker
 from researcher.llm.openrouter import OpenRouterClient
 from researcher.models import LLMTier
 
-
 # ---------- Fakes ----------
 
 def _fake_openai_response(text: str, tokens_in: int = 11, tokens_out: int = 7) -> Any:
@@ -40,7 +39,7 @@ def _fake_openai_cls(responses: list[Any]) -> type:
     it = iter(responses)
 
     class FakeAsyncOpenAI:
-        instances: list["FakeAsyncOpenAI"] = []
+        instances: list[FakeAsyncOpenAI] = []
         create_calls: list[dict] = []
 
         def __init__(self, api_key: str, base_url: str) -> None:

@@ -12,10 +12,9 @@ import asyncio
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any, Literal, Optional, Union
+from typing import Annotated, Any, Literal, Optional
 
 from pydantic import BaseModel, Field
-
 
 # ---------- Payloads ----------
 
@@ -168,20 +167,7 @@ class SubagentCall(_EventBase):
 
 
 Event = Annotated[
-    Union[
-        CycleStart,
-        CycleEnd,
-        AgentSpawn,
-        AgentStateChange,
-        AgentLog,
-        FactWritten,
-        ConflictDetected,
-        ConflictResolved,
-        CostUpdate,
-        BudgetWarning,
-        RunComplete,
-        SubagentCall,
-    ],
+    CycleStart | CycleEnd | AgentSpawn | AgentStateChange | AgentLog | FactWritten | ConflictDetected | ConflictResolved | CostUpdate | BudgetWarning | RunComplete | SubagentCall,
     Field(discriminator="type"),
 ]
 

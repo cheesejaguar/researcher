@@ -8,7 +8,7 @@ Task, emit FactClaims, return an AgentResult.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Awaitable, Callable, ClassVar
 
 from researcher.events import (
@@ -21,7 +21,6 @@ from researcher.events import (
 from researcher.llm.client import LLMClient
 from researcher.models import AgentResult, AgentState, Task
 from researcher.storage.store import KnowledgeStore
-
 
 EventEmitter = Callable[[Event], Awaitable[None]]
 
@@ -62,7 +61,7 @@ class Agent(ABC):
         await self._emit(
             AgentStateChange(
                 seq=0,
-                ts=datetime.now(timezone.utc),
+                ts=datetime.now(UTC),
                 run_id=self._run_id,
                 payload=AgentStateChangePayload(
                     agent_id=self.agent_id, old=old.value, new=new.value
@@ -74,7 +73,7 @@ class Agent(ABC):
         await self._emit(
             AgentLog(
                 seq=0,
-                ts=datetime.now(timezone.utc),
+                ts=datetime.now(UTC),
                 run_id=self._run_id,
                 payload=AgentLogPayload(
                     agent_id=self.agent_id,

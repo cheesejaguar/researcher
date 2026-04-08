@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -27,7 +27,7 @@ def _critic_task(trigger_agent: str = "native-abc") -> Task:
         spec_ref="wars",
         field_hints=[trigger_agent],
         budget_usd=0.01,
-        deadline_ts=datetime.now(timezone.utc) + timedelta(minutes=5),
+        deadline_ts=datetime.now(UTC) + timedelta(minutes=5),
     )
 
 

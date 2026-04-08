@@ -62,7 +62,7 @@ class KnowledgeStore(ABC):
     @abstractmethod
     async def close(self) -> None: ...
 
-    async def __aenter__(self) -> "KnowledgeStore":
+    async def __aenter__(self) -> KnowledgeStore:
         await self.open()
         return self
 

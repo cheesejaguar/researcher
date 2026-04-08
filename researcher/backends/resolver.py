@@ -11,7 +11,6 @@ from researcher.backends.models import (
     CliKind,
 )
 
-
 Policy = Literal["auto", "cli", "api"]
 
 # Map CliKind -> executable name to probe.

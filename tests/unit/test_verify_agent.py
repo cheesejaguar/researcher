@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -35,7 +35,7 @@ def _verify_task(entity_id: str, field: str) -> Task:
         target_entity_id=entity_id,
         field_hints=[field],
         budget_usd=0.01,
-        deadline_ts=datetime.now(timezone.utc) + timedelta(minutes=5),
+        deadline_ts=datetime.now(UTC) + timedelta(minutes=5),
     )
 
 
@@ -66,7 +66,7 @@ async def test_verify_picks_winner_and_emits_claim() -> None:
     entity_id = await store.upsert_entity(
         entity_type="War", name="World War II", fields={}
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     cell_a = FieldCell(value=1939, confidence=0.9, provenance_ids=["p1"], updated_at=now)
     cell_b = FieldCell(value=1940, confidence=0.6, provenance_ids=["p2"], updated_at=now)
     conflict = Conflict(

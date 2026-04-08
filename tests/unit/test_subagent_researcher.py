@@ -1,6 +1,6 @@
 """Tests for SubagentResearcher — the Agent subclass that drives CLI runners."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -27,7 +27,7 @@ def _sample_task() -> Task:
         seed_query="major wars since 1500",
         field_hints=["name", "start_year", "end_year", "belligerents"],
         budget_usd=0.01,
-        deadline_ts=datetime.now(timezone.utc) + timedelta(minutes=5),
+        deadline_ts=datetime.now(UTC) + timedelta(minutes=5),
     )
 
 

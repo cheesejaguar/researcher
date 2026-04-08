@@ -14,7 +14,6 @@ from pydantic import BaseModel
 
 from researcher.models import LLMTier
 
-
 T = TypeVar("T", bound=BaseModel)
 
 

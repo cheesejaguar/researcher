@@ -9,7 +9,7 @@ Load-bearing invariants for the event bus:
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -21,7 +21,6 @@ from researcher.events import (
     CostUpdatePayload,
     CycleStart,
     CycleStartPayload,
-    Event,
     EventBus,
     FactWritten,
     FactWrittenPayload,
@@ -30,12 +29,11 @@ from researcher.events import (
     parse_event,
 )
 
-
 RUN_ID = "run-test"
 
 
 def _ts() -> datetime:
-    return datetime(2026, 4, 8, 12, 0, tzinfo=timezone.utc)
+    return datetime(2026, 4, 8, 12, 0, tzinfo=UTC)
 
 
 # ---------- Event union ----------

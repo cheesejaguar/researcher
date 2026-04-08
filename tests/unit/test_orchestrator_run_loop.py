@@ -1,15 +1,12 @@
 """Tests for the Orchestrator.run() loop — agent dispatch, claim submission, stop reasons."""
 
-from datetime import datetime, timedelta, timezone
-from typing import Any
 
 import pytest
 
-from researcher.backends.models import CliKind, CliResult, SubagentResponse
+from researcher.backends.models import CliResult
 from researcher.backends.resolver import BackendResolver
 from researcher.budget import Budget
 from researcher.events import CycleEnd, CycleStart, RunComplete, SubagentCall
-from researcher.models import AgentResult, Task, TaskKind
 from researcher.orchestrator import Orchestrator, StopReason
 from researcher.scheduler import Scheduler
 from researcher.spec import EntitySpec, FieldSpec, RunSpec
@@ -17,7 +14,6 @@ from researcher.storage.writer import FactWriter
 from tests.stubs.bus import StubEventBus
 from tests.stubs.cli_runner import (
     StubCliRunner,
-    make_empty_result,
     make_wars_discover_result,
 )
 from tests.stubs.llm import StubLLMClient

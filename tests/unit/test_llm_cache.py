@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
-
-import pytest
 
 from researcher.llm.cache import LLMResponseCache
 from researcher.llm.client import LLMResponse, LLMUsage

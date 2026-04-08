@@ -24,7 +24,6 @@ import pytest
 from researcher.backends.cli_runner import ClaudeCodeRunner
 from researcher.backends.models import SubagentResponse
 
-
 pytestmark = [
     pytest.mark.manual,
     pytest.mark.skipif(

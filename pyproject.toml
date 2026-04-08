@@ -56,4 +56,12 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
-ignore = ["E501"]
+ignore = [
+    "E501",   # line too long — soft limit
+    "UP045",  # project convention: Optional[X] stays (not `X | None`)
+    "UP042",  # project convention: class Foo(str, Enum) stays (not StrEnum)
+    "UP035",  # allow `from typing import Callable` etc. — avoids churn
+    "E402",   # module-level imports inside functions are intentional (lazy)
+    "B008",   # typer's Argument/Option are the recommended default style
+]
+per-file-ignores = { "tests/**" = ["E402"] }

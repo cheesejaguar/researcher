@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,6 @@ from researcher.storage.resolver import (
     ResolveDecision,
 )
 from researcher.storage.store import FieldCell
-from datetime import datetime, timezone
 
 
 async def _hash_embed(texts: list[str]) -> list[list[float]]:
@@ -36,7 +36,7 @@ async def _canned_embed_factory(vectors: dict[str, list[float]]):
 def _cell(v) -> FieldCell:
     return FieldCell(
         value=v, confidence=0.9, provenance_ids=[],
-        updated_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(UTC),
     )
 
 

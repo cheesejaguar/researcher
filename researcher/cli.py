@@ -7,6 +7,7 @@ subagent backend. The remaining subcommands (`watch`, `inspect`, `resume`,
 
 from __future__ import annotations
 
+from datetime import UTC
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -119,13 +120,13 @@ async def _execute_run(
     backend: str,
     obsidian_vault_override: str,
     offline: bool,
-) -> "StopReason":
+) -> StopReason:
     """Construct every wire and execute :meth:`Orchestrator.run` once.
 
     Imports are lazy so `researcher --help` doesn't pull in DuckDB, Pydantic
     model factories, or sentence-transformers on every invocation.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from researcher.backends.cli_runner import ClaudeCodeRunner, CodexRunner
     from researcher.backends.models import CliKind
@@ -139,7 +140,7 @@ async def _execute_run(
         FactWrittenPayload,
     )
     from researcher.integrations.obsidian import ObsidianWriter
-    from researcher.orchestrator import Orchestrator, StopReason
+    from researcher.orchestrator import Orchestrator
     from researcher.scheduler import Scheduler
     from researcher.spec import build_entity_class, load_spec
     from researcher.storage.duckdb_store import DuckDBKnowledgeStore
@@ -183,7 +184,7 @@ async def _execute_run(
                 await bus.emit(
                     FactWritten(
                         seq=0,
-                        ts=datetime.now(timezone.utc),
+                        ts=datetime.now(UTC),
                         run_id=run_id,
                         payload=FactWrittenPayload(
                             entity_id=entity_id,
@@ -201,7 +202,7 @@ async def _execute_run(
                 await bus.emit(
                     ConflictDetected(
                         seq=0,
-                        ts=datetime.now(timezone.utc),
+                        ts=datetime.now(UTC),
                         run_id=run_id,
                         payload=ConflictPayload(
                             entity_id=entity_id,

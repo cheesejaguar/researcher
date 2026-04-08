@@ -10,7 +10,7 @@ reads, so skill card quality stays under human review.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -124,7 +124,7 @@ class CriticAgent(Agent):
 
     def _append_card(self, card: _SkillCard, trigger_agent: str) -> None:
         self._suggestions_path.parent.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now(timezone.utc).isoformat()
+        ts = datetime.now(UTC).isoformat()
         entry = (
             f"\n## {card.name or 'unnamed_skill'} ({ts})\n"
             f"Triggered by: `{trigger_agent}`\n\n"

@@ -15,7 +15,6 @@ from researcher.spec import (
     load_spec,
 )
 
-
 # ---------- RunSpec defaults ----------
 
 def test_runspec_defaults():

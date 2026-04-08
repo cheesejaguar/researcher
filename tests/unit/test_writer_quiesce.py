@@ -1,7 +1,7 @@
 """Tests for FactWriter.quiesce() — per-cycle drain without shutdown."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -20,7 +20,7 @@ def _make_claim(i: int) -> FactClaim:
         confidence=0.9,
         provenance=Provenance(
             url=f"https://example.com/{i}",
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
             snippet=f"snippet {i}",
             extractor_model="stub",
             agent_id="agent-1",

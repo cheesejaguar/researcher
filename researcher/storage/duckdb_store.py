@@ -31,7 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
@@ -52,7 +52,7 @@ def _cosine(a: list[float], b: list[float]) -> float:
     """Cosine similarity for two equal-length float vectors. 0.0 on degeneracy."""
     if not a or not b:
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     if na == 0 or nb == 0:
@@ -61,7 +61,7 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class DuckDBKnowledgeStore(KnowledgeStore):
@@ -291,7 +291,7 @@ class DuckDBKnowledgeStore(KnowledgeStore):
             cur = conn.execute(sql, list(params))
             rows = cur.fetchall()
             cols = [d[0] for d in (cur.description or [])]
-            return [dict(zip(cols, row)) for row in rows]
+            return [dict(zip(cols, row, strict=False)) for row in rows]
 
     # ---- embeddings + similarity ----------------------------------------
 

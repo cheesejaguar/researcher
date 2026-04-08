@@ -8,7 +8,7 @@ for each via AgentResult.spawned_tasks.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel
 
@@ -126,7 +126,7 @@ class EnrichAgent(Agent):
             )
 
         deadline = task.deadline_ts or (
-            datetime.now(timezone.utc) + timedelta(minutes=5)
+            datetime.now(UTC) + timedelta(minutes=5)
         )
         spawned: list[Task] = []
         for name in response.related:

@@ -1,10 +1,7 @@
 """Tests for DiskCache — TTL, eviction, persistence, file locking."""
 
-import json
 import time
 from pathlib import Path
-
-import pytest
 
 from researcher.backends.disk_cache import DiskCache
 from researcher.backends.models import CliResult, Extraction, SubagentResponse

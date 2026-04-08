@@ -1,6 +1,5 @@
 """Tests for CodexRunner — argv construction, output parse, error matrix."""
 
-import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,7 +8,6 @@ import pytest
 
 from researcher.backends.cli_runner import CodexRunner
 from researcher.backends.models import SubagentResponse
-
 
 SCHEMA = SubagentResponse.model_json_schema()
 

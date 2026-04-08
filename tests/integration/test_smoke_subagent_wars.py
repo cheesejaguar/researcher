@@ -6,7 +6,7 @@ produces FactClaims that flow through the writer and the event bus
 records a subagent_call event.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -67,7 +67,7 @@ async def test_subagent_smoke_end_to_end_offline():
         seed_query="Major wars since 1500",
         field_hints=["name", "start_year", "end_year", "belligerents"],
         budget_usd=0.01,
-        deadline_ts=datetime.now(timezone.utc) + timedelta(minutes=5),
+        deadline_ts=datetime.now(UTC) + timedelta(minutes=5),
     )
 
     # Act
