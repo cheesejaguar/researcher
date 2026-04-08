@@ -66,9 +66,13 @@ def _generate_run_id(spec_path: Path) -> str:
 
 @app.command()
 def run(
-    spec: Path = typer.Argument(..., exists=True, readable=True, help="Path to a RunSpec YAML file."),
+    spec: Path = typer.Argument(
+        ..., exists=True, readable=True, help="Path to a RunSpec YAML file."
+    ),
     run_id: str = typer.Option("", "--run-id", help="Custom run id (default: autogen)."),
-    no_tui: bool = typer.Option(False, "--no-tui", help="Do not auto-launch the Ink TUI child process."),
+    no_tui: bool = typer.Option(
+        False, "--no-tui", help="Do not auto-launch the Ink TUI child process."
+    ),
     offline: bool = typer.Option(False, "--offline", help="Use stub LLM client + fixture corpus."),
     backend: str = typer.Option(
         "auto",
@@ -140,8 +144,7 @@ def run(
 
     typer.echo(
         f"[researcher run] spec={spec} run_id={actual_run_id} "
-        f"backend={backend} run_dir={run_dir}"
-        + (f" resume={resume}" if resume else "")
+        f"backend={backend} run_dir={run_dir}" + (f" resume={resume}" if resume else "")
     )
 
     import asyncio as _asyncio
@@ -216,8 +219,7 @@ async def _execute_run(
     entity_schema_dict = {
         "entity_type": primary_entity.name,
         "fields": [
-            {"name": f.name, "type": f.type, "required": f.required}
-            for f in primary_entity.fields
+            {"name": f.name, "type": f.type, "required": f.required} for f in primary_entity.fields
         ],
     }
 
@@ -235,9 +237,7 @@ async def _execute_run(
         ckpt = await store.load_checkpoint(resume)
         if ckpt is None:
             await store.close()
-            raise typer.BadParameter(
-                f"no checkpoint found for run_id={resume!r}"
-            )
+            raise typer.BadParameter(f"no checkpoint found for run_id={resume!r}")
         checkpoint_cycle = int(ckpt["cycle"])
         sched_data = ckpt["data"].get("scheduler", {})
         budget_data = ckpt["data"].get("budget", {})
@@ -273,9 +273,7 @@ async def _execute_run(
             # MiniLM, 384-dim) over the hash-based placeholder. The
             # ``--fast-startup`` flag (and ``offline``) keep the old behavior
             # for tests/CI that can't pay the MiniLM cold-load cost.
-            embed_fn = (
-                _default_embed_fn if (fast_startup or offline) else LocalEmbedder()
-            )
+            embed_fn = _default_embed_fn if (fast_startup or offline) else LocalEmbedder()
             resolver = DefaultEntityResolver(
                 store=store,
                 embed_fn=embed_fn,
@@ -414,7 +412,9 @@ async def _execute_run(
 @app.command()
 def watch(
     run_id: str = typer.Argument(..., help="Run id to attach to."),
-    replay: bool = typer.Option(False, "--replay", help="Replay JSONL from disk instead of attaching to the live socket."),
+    replay: bool = typer.Option(
+        False, "--replay", help="Replay JSONL from disk instead of attaching to the live socket."
+    ),
 ) -> None:
     """Attach the TUI to a running (or completed) run."""
     typer.echo(f"[researcher watch] run_id={run_id} replay={replay}")
@@ -520,6 +520,86 @@ def migrate(
             await store.close()
 
     _asyncio.run(_list())
+
+
+@app.command()
+def mcp(
+    db: Path = typer.Option(
+        ...,
+        "--db",
+        exists=True,
+        readable=True,
+        help="Path to a researcher DuckDB store (runs/<run_id>/store.duckdb).",
+    ),
+    allow_start_run: bool = typer.Option(
+        False,
+        "--allow-start-run",
+        help=(
+            "Expose the start_run tool, which shells out to "
+            "`researcher run <spec>` via an async subprocess launcher. "
+            "Disabled by default so the server is read-only."
+        ),
+    ),
+) -> None:
+    """Start a researcher MCP server reading JSON-RPC from stdin.
+
+    Exposes the KnowledgeStore from ``--db`` over the MCP tool
+    interface so external agents (Claude Desktop, Cursor, Gemini) can
+    query and optionally trigger research runs. Responses are written
+    to stdout as newline-delimited JSON. Cancel with Ctrl-C.
+    """
+    import asyncio as _asyncio
+
+    from researcher.mcp.server import ResearcherMcpServer
+    from researcher.mcp.stdio import serve_stdio
+    from researcher.storage.duckdb_store import DuckDBKnowledgeStore
+
+    async def _serve() -> None:
+        store = DuckDBKnowledgeStore(db_path=db)
+        await store.open()
+        try:
+            launcher = _build_run_launcher() if allow_start_run else None
+            server = ResearcherMcpServer(store=store, run_launcher=launcher)
+            await serve_stdio(server)
+        finally:
+            await store.close()
+
+    _asyncio.run(_serve())
+
+
+def _build_run_launcher():
+    """Return an async launcher that spawns `researcher run <spec>`.
+
+    The launcher only waits for the subprocess to *start*, not to
+    complete — exposing start_run as a fire-and-forget trigger is the
+    whole point of ``--allow-start-run``. Operators who want
+    synchronous run execution should continue to invoke ``researcher
+    run`` directly.
+    """
+    import asyncio as _asyncio
+    import secrets
+    import sys as _sys
+
+    async def launcher(spec_path: str, run_id: str | None) -> str:
+        resolved_run_id = run_id or secrets.token_hex(6)
+        args = [
+            _sys.executable,
+            "-m",
+            "researcher",
+            "run",
+            spec_path,
+            "--run-id",
+            resolved_run_id,
+        ]
+        await _asyncio.create_subprocess_exec(
+            *args,
+            stdin=_asyncio.subprocess.DEVNULL,
+            stdout=_asyncio.subprocess.DEVNULL,
+            stderr=_asyncio.subprocess.DEVNULL,
+        )
+        return resolved_run_id
+
+    return launcher
 
 
 @app.command()
