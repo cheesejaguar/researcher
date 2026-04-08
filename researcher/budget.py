@@ -28,6 +28,7 @@ class Budget:
         warn_fractions: tuple[float, ...] = (0.5, 0.8, 0.95),
         per_task_fraction: float = 0.05,
         per_entity_fraction: float = 0.03,
+        max_subagent_calls: int = 500,
     ) -> None:
         if usd_cap <= 0:
             raise ValueError("usd_cap must be > 0")
@@ -39,6 +40,8 @@ class Budget:
         self._per_task_fraction = per_task_fraction
         self._per_entity_fraction = per_entity_fraction
         self._wall_started_at: Optional[float] = None
+        self._max_subagent_calls = max_subagent_calls
+        self._subagent_calls_total = 0
 
     # ---------- Spend tracking ----------
 
@@ -103,3 +106,15 @@ class Budget:
         if self._wall_started_at is None:
             return False
         return (time.monotonic() - self._wall_started_at) >= self._wall_cap_s
+
+    # ---------- Subagent calls ----------
+
+    @property
+    def subagent_calls_total(self) -> int:
+        return self._subagent_calls_total
+
+    def record_subagent_call(self) -> None:
+        self._subagent_calls_total += 1
+
+    def allows_subagent_call(self) -> bool:
+        return self._subagent_calls_total < self._max_subagent_calls
