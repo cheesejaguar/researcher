@@ -109,8 +109,11 @@ async def test_obsidian_smoke_end_to_end_offline(tmp_path: Path):
     war_dir = researcher_dir / "War"
     assert war_dir.is_dir()
 
-    # Assert — exactly one entity file (from the wars_discover fixture)
-    md_files = list(war_dir.glob("*.md"))
+    # Assert — exactly one entity file (from the wars_discover fixture).
+    # Skip the `_index.md` note the writer generates during _graceful_stop.
+    md_files = [
+        p for p in war_dir.glob("*.md") if p.name != "_index.md"
+    ]
     assert len(md_files) == 1
     war_file = md_files[0]
 
