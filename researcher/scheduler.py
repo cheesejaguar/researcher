@@ -59,9 +59,58 @@ class Scheduler:
         return batch
 
     async def update_from_metrics(self, metrics: StoreMetrics) -> None:
-        """Record post-cycle metrics; used by `plateau` to decide stopping."""
+        """Record post-cycle metrics and enqueue EXPAND tasks for sparse entities.
+
+        After every cycle this method looks for entities with only their
+        ``name`` field filled (the DiscoverAgent drop) and enqueues one
+        EXPAND task per entity so the next cycle can populate the full
+        schema. Capped at ``max_entities_per_cycle`` so a single cycle
+        never overloads the map phase.
+        """
         self._entity_history.append(metrics.entities_total)
         self._cycle += 1
+
+        # Auto-follow-up: if the queue is empty, emit EXPAND tasks for every
+        # sparse entity we can find. Best-effort — a query failure or a
+        # non-SQL store just skips the enqueue and the run stops naturally.
+        if self._queue:
+            return
+        try:
+            sparse = await self._store.query(
+                """
+                SELECT e.id AS id
+                FROM entities e
+                WHERE e.id NOT IN (
+                    SELECT DISTINCT entity_id FROM fields
+                    WHERE value_json != 'null' AND field_name != 'name'
+                )
+                LIMIT ?
+                """,
+                (self._spec.max_entities_per_cycle,),
+            )
+        except Exception:
+            return
+
+        if not sparse:
+            return
+
+        from datetime import datetime, timedelta
+
+        deadline = datetime.now(UTC) + timedelta(seconds=self._spec.wall_limit_s)
+        per_task_budget = self._spec.budget_usd / max(len(sparse), 1) / 10
+        for row in sparse:
+            entity_id = row.get("id")
+            if not entity_id:
+                continue
+            self._queue.append(
+                Task(
+                    kind=TaskKind.EXPAND,
+                    spec_ref=self._spec.spec_id,
+                    target_entity_id=entity_id,
+                    budget_usd=per_task_budget,
+                    deadline_ts=deadline,
+                )
+            )
 
     async def mark_done(self, task_id: str, result: AgentResult) -> None:
         """Record that a task finished; for v1 this is a no-op hook."""
