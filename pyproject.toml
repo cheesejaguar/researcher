@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "researcher"
+version = "0.1.0"
+description = "A modular, observable, multi-agent deep-research orchestration system."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "Aaron" }]
+dependencies = [
+    "pydantic>=2.6",
+    "typer>=0.12",
+    "duckdb>=1.1",
+    "httpx>=0.27",
+    "aiolimiter>=1.1",
+    "openai>=1.40",
+    "sentence-transformers>=2.7",
+    "pyyaml>=6.0",
+    "trafilatura>=1.12",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+researcher = "researcher.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["researcher"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
