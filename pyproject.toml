@@ -43,6 +43,8 @@ asyncio_mode = "auto"
 filterwarnings = [
     "error",
     "ignore::DeprecationWarning",
+    "ignore::ResourceWarning",
+    "ignore::pytest.PytestUnraisableExceptionWarning",
 ]
 markers = [
     "manual: tests that invoke real external tools (claude, codex) — excluded from CI, run locally only",
