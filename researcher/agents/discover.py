@@ -79,10 +79,18 @@ class DiscoverAgent(Agent):
         fetched: list[tuple[str, str]] = []  # (url, text)
         for result in search_results[: self._deps.max_fetch_per_task]:
             fetch = await self._deps.http.fetch(result.url)
-            if not fetch.ok or not fetch.content:
+            if not fetch.ok or (not fetch.content and fetch.raw_bytes is None):
                 await self.log("info", f"skip {result.url}: {fetch.error}")
                 continue
-            text = extract_readable(fetch.content, url=result.url) or fetch.content
+            text = (
+                extract_readable(
+                    fetch.content,
+                    url=result.url,
+                    raw_bytes=fetch.raw_bytes,
+                    content_type=fetch.content_type,
+                )
+                or fetch.content
+            )
             chunks = chunk_text(text)
             if not chunks:
                 continue

@@ -30,6 +30,9 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
 ]
+pdf = [
+    "pymupdf>=1.24",
+]
 
 [project.scripts]
 researcher = "researcher.__main__:main"
