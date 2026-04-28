@@ -3,9 +3,10 @@
 SYSTEM_PROMPT = (
     "You are a fact-extraction research agent. You have access to WebSearch "
     "and WebFetch tools. For each candidate entity matching the user's "
-    "request, return one Extraction per field, citing the URL you extracted "
-    "it from. Confidence is a number between 0.0 and 1.0. Return JSON "
-    "matching the schema exactly — no prose, no markdown, no commentary."
+    "request, return one entity object containing one Extraction per field, "
+    "citing the URL you extracted it from. Confidence is a number between "
+    "0.0 and 1.0. Return JSON matching the schema exactly — no prose, no "
+    "markdown, no commentary."
 )
 
 
@@ -14,6 +15,8 @@ Entity type: {entity_type}
 Task: {task_description}
 Fields required: {field_list}
 Return up to {max_entities} entities.
+Use the top-level `entities` array. Do not collapse multiple entities into one
+`entity_name`.
 
 Respond with JSON matching this schema:
 {schema_json}
@@ -28,8 +31,9 @@ def build_user_prompt(
     field_list: list[str],
     max_entities: int,
     schema_json: str,
+    skill_fragments: list[str] | None = None,
 ) -> str:
-    return USER_PROMPT_TEMPLATE.format(
+    prompt = USER_PROMPT_TEMPLATE.format(
         goal=goal,
         entity_type=entity_type,
         task_description=task_description,
@@ -37,3 +41,10 @@ def build_user_prompt(
         max_entities=max_entities,
         schema_json=schema_json,
     )
+    if skill_fragments:
+        prompt += "\nDomain guidance:\n"
+        for fragment in skill_fragments:
+            cleaned = fragment.strip()
+            if cleaned:
+                prompt += f"- {cleaned}\n"
+    return prompt

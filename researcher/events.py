@@ -127,6 +127,20 @@ class CoverageReportPayload(BaseModel):
     next_recommended_seeds: list[str]
 
 
+class SourcePackPayload(BaseModel):
+    sources: int
+    chunks: int
+
+
+class VerificationVotePayload(BaseModel):
+    entity_id: str | None = None
+    field: str
+    model: str
+    vote: Any
+    confidence: float
+    disagreement: bool = False
+
+
 # ---------- Event envelope ----------
 
 
@@ -211,8 +225,18 @@ class CoverageReport(_EventBase):
     payload: CoverageReportPayload
 
 
+class SourcePackLoaded(_EventBase):
+    type: Literal["source_pack_loaded"] = "source_pack_loaded"
+    payload: SourcePackPayload
+
+
+class VerificationVote(_EventBase):
+    type: Literal["verification_vote"] = "verification_vote"
+    payload: VerificationVotePayload
+
+
 Event = Annotated[
-    CycleStart | CycleEnd | AgentSpawn | AgentStateChange | AgentLog | FactWritten | ConflictDetected | ConflictResolved | CostUpdate | BudgetWarning | RunComplete | SubagentCall | InterruptRequested | InterruptResolved | CoverageReport,
+    CycleStart | CycleEnd | AgentSpawn | AgentStateChange | AgentLog | FactWritten | ConflictDetected | ConflictResolved | CostUpdate | BudgetWarning | RunComplete | SubagentCall | InterruptRequested | InterruptResolved | CoverageReport | SourcePackLoaded | VerificationVote,
     Field(discriminator="type"),
 ]
 
@@ -337,3 +361,86 @@ class EventBus:
     @property
     def next_seq(self) -> int:
         return self._seq
+
+
+class EventSocketServer:
+    """Unix-socket broadcaster for live TUI attach.
+
+    The EventBus remains authoritative via JSONL. This server is a best-effort
+    live view over the bus' bounded socket queue: every queued event is written
+    as one JSON line to all currently connected clients. Slow or broken clients
+    are dropped so they cannot block the orchestrator.
+    """
+
+    def __init__(self, bus: EventBus, socket_path: Path | str) -> None:
+        self._bus = bus
+        self._socket_path = Path(socket_path)
+        self._server: asyncio.AbstractServer | None = None
+        self._pump_task: asyncio.Task | None = None
+        self._clients: set[asyncio.StreamWriter] = set()
+
+    async def start(self) -> None:
+        self._socket_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self._socket_path.unlink()
+        except FileNotFoundError:
+            pass
+        self._server = await asyncio.start_unix_server(
+            self._handle_client,
+            path=str(self._socket_path),
+        )
+        self._pump_task = asyncio.create_task(self._pump())
+
+    async def stop(self) -> None:
+        if self._pump_task is not None:
+            self._pump_task.cancel()
+            try:
+                await self._pump_task
+            except asyncio.CancelledError:
+                pass
+            self._pump_task = None
+        for writer in list(self._clients):
+            await self._close_writer(writer)
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+            self._server = None
+        try:
+            self._socket_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    async def _handle_client(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        self._clients.add(writer)
+        try:
+            await reader.read()
+        finally:
+            self._clients.discard(writer)
+            writer.close()
+
+    async def _pump(self) -> None:
+        while True:
+            event = await self._bus.socket_queue.get()
+            while not self._clients:
+                await asyncio.sleep(0.01)
+            line = (event.model_dump_json() + "\n").encode("utf-8")
+            dead: list[asyncio.StreamWriter] = []
+            for writer in list(self._clients):
+                try:
+                    writer.write(line)
+                    await writer.drain()
+                except Exception:
+                    dead.append(writer)
+            for writer in dead:
+                await self._close_writer(writer)
+            self._bus.socket_queue.task_done()
+
+    async def _close_writer(self, writer: asyncio.StreamWriter) -> None:
+        self._clients.discard(writer)
+        try:
+            writer.close()
+            await asyncio.wait_for(writer.wait_closed(), timeout=0.5)
+        except Exception:
+            pass

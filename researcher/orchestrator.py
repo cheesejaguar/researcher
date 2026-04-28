@@ -21,7 +21,9 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Optional
+from uuid import uuid4
 
 from researcher.agents.native_deps import NativeAgentDeps
 from researcher.agents.subagent import SubagentResearcher
@@ -30,6 +32,12 @@ from researcher.backends.models import BackendChoice, CliKind
 from researcher.backends.resolver import BackendResolver
 from researcher.budget import Budget, BudgetExceededError
 from researcher.events import (
+    AgentSpawn,
+    AgentSpawnPayload,
+    BudgetWarning,
+    BudgetWarningPayload,
+    CostUpdate,
+    CostUpdatePayload,
     CoverageReport,
     CoverageReportPayload,
     CycleEnd,
@@ -43,11 +51,14 @@ from researcher.events import (
     InterruptResolvedPayload,
     RunComplete,
     RunCompletePayload,
+    VerificationVote,
+    VerificationVotePayload,
 )
 from researcher.interrupts import InterruptHandler
 from researcher.llm.client import LLMClient
 from researcher.models import AgentResult, AgentState, Task, TaskKind
 from researcher.scheduler import Scheduler
+from researcher.skills.registry import SkillRegistry
 from researcher.spec import RunSpec
 from researcher.storage.store import CoverageSnapshot, KnowledgeStore, StoreMetrics
 from researcher.storage.writer import FactWriter
@@ -78,6 +89,8 @@ class Orchestrator:
         obsidian_writer: Any = None,  # Optional[ObsidianWriter]; avoid import cycle
         resume_from: Optional[int] = None,
         coverage_confidence_threshold: float = 0.5,
+        db_path: str = "",
+        stop_file: str = "",
     ) -> None:
         self._spec = spec
         self._store = store
@@ -96,6 +109,7 @@ class Orchestrator:
         self._circuit_break_threshold: int = 3
         self._obsidian_writer = obsidian_writer
         self._native_deps: Optional[NativeAgentDeps] = None
+        self._skill_registry: SkillRegistry | None = None
         self._resume_from = resume_from
         self._interrupt_handler: Optional[InterruptHandler] = None
         # v1.2: optional difficulty-aware compute gate (opt-in).
@@ -103,6 +117,8 @@ class Orchestrator:
         # v1.2 #8: confidence threshold below which a field cell counts
         # as "low confidence" in the structured CoverageReport event.
         self._coverage_confidence_threshold = float(coverage_confidence_threshold)
+        self._db_path = db_path
+        self._stop_file = Path(stop_file) if stop_file else None
 
     def set_backend_resolver(self, resolver: BackendResolver) -> None:
         self._backend_resolver = resolver
@@ -188,6 +204,14 @@ class Orchestrator:
         old behavior, while new code can opt in explicitly.
         """
         self._native_deps = deps
+        self._skill_registry = deps.skill_registry
+
+    def set_skill_registry(self, registry: SkillRegistry | None) -> None:
+        """Register domain skill cards for the CLI subagent path."""
+        self._skill_registry = registry
+
+    def _stop_requested(self) -> bool:
+        return bool(self._stop_file and self._stop_file.exists())
 
     def _resolver_pick(self, task: Task) -> BackendChoice:
         if self._backend_resolver is None:
@@ -245,6 +269,9 @@ class Orchestrator:
                 # runs drain + graceful_stop.
                 return reason
             while self._cycle < self._spec.max_cycles:
+                if self._stop_requested():
+                    reason = StopReason.CTRL_C
+                    break
                 self._cycle += 1
                 self._reset_cycle_failure_counters()
 
@@ -267,6 +294,7 @@ class Orchestrator:
                     if isinstance(r, Exception):
                         saw_real_exception = True
                         continue
+                    await self._record_result_cost(r)
                     # Submit successful claims to the writer.
                     for claim in r.claims:
                         try:
@@ -318,6 +346,7 @@ class Orchestrator:
                     for r in revision_results:
                         if isinstance(r, Exception):
                             continue
+                        await self._record_result_cost(r)
                         for claim in r.claims:
                             try:
                                 await self._writer.submit(claim)
@@ -346,6 +375,7 @@ class Orchestrator:
                         pass
 
                 metrics = await self._store.snapshot_metrics()
+                await self._sync_budget_from_metrics(metrics)
                 await self._scheduler.update_from_metrics(metrics)
                 await self._emit_cycle_end(metrics)
                 await self._maybe_emit_coverage_report(metrics)
@@ -371,6 +401,9 @@ class Orchestrator:
 
                 # Stop checks — subagent_cap is highest priority because it's
                 # a hard stop regardless of other state.
+                if self._stop_requested():
+                    reason = StopReason.CTRL_C
+                    break
                 if subagent_cap_hit:
                     reason = StopReason.SUBAGENT_CAP
                     break
@@ -452,6 +485,11 @@ class Orchestrator:
                     pass  # gate failure → fail open, dispatch normally
             choice = self._resolver_pick(task)
             if choice.kind is None:
+                await self._emit_agent_spawn(
+                    task=task,
+                    agent_id=f"native-{task.id[:8]}",
+                    kind=task.kind.value,
+                )
                 return await self._spawn_native_agent(task)
             if self._cli_runner_factory is None:
                 raise RuntimeError(
@@ -471,6 +509,11 @@ class Orchestrator:
                     ],
                 }
 
+            await self._emit_agent_spawn(
+                task=task,
+                agent_id=f"sub-{task.id[:8]}",
+                kind="subagent",
+            )
             agent = SubagentResearcher(
                 agent_id=f"sub-{task.id[:8]}",
                 llm=self._llm,
@@ -484,8 +527,71 @@ class Orchestrator:
                 goal=self._spec.goal,
                 max_entities=self._spec.max_entities_per_subagent_call,
                 timeout_s=float(self._spec.subagent_timeout_s),
+                skill_registry=self._skill_registry,
             )
             return await agent.run(task)
+
+    async def _emit_agent_spawn(self, task: Task, agent_id: str, kind: str) -> None:
+        await self._bus.emit(
+            AgentSpawn(
+                seq=0,
+                ts=datetime.now(UTC),
+                run_id=self._run_id,
+                payload=AgentSpawnPayload(
+                    agent_id=agent_id,
+                    task_id=task.id,
+                    kind=kind,
+                ),
+            )
+        )
+
+    async def _record_result_cost(self, result: AgentResult) -> None:
+        if result.cost_usd <= 0:
+            return
+        self._budget.spend(float(result.cost_usd))
+        await self._emit_budget_updates()
+
+    async def _sync_budget_from_metrics(self, metrics: StoreMetrics) -> None:
+        observed = float(metrics.cost_usd_total)
+        delta = observed - self._budget.total_spent()
+        if delta > 0:
+            self._budget.spend(delta)
+        await self._emit_budget_updates()
+
+    async def _emit_budget_updates(self) -> None:
+        tokens_in = 0
+        tokens_out = 0
+        tracker = getattr(self._llm, "cost_tracker", None)
+        if tracker is not None:
+            tokens_in = int(getattr(tracker, "total_tokens_in", 0) or 0)
+            tokens_out = int(getattr(tracker, "total_tokens_out", 0) or 0)
+        await self._bus.emit(
+            CostUpdate(
+                seq=0,
+                ts=datetime.now(UTC),
+                run_id=self._run_id,
+                payload=CostUpdatePayload(
+                    cost_usd_total=self._budget.total_spent(),
+                    tokens_in_total=tokens_in,
+                    tokens_out_total=tokens_out,
+                ),
+            )
+        )
+        warning = self._budget.should_warn()
+        if warning is None:
+            return
+        await self._bus.emit(
+            BudgetWarning(
+                seq=0,
+                ts=datetime.now(UTC),
+                run_id=self._run_id,
+                payload=BudgetWarningPayload(
+                    cost_usd_total=self._budget.total_spent(),
+                    budget_usd=self._budget.cap,
+                    fraction=warning,
+                ),
+            )
+        )
 
     async def _spawn_native_agent(self, task: Task) -> AgentResult:
         """Dispatch a task to the appropriate native Agent subclass by TaskKind."""
@@ -687,10 +793,53 @@ class Orchestrator:
             metrics = await self._store.snapshot_metrics()
         except Exception:
             metrics = None
+        else:
+            try:
+                await self._sync_budget_from_metrics(metrics)
+            except Exception:
+                pass
 
         wall_s = 0.0
         if self._started_at is not None:
             wall_s = (datetime.now(UTC) - self._started_at).total_seconds()
+
+        summary = {
+            "run_id": self._run_id,
+            "spec_id": self._spec.spec_id,
+            "goal": self._spec.goal,
+            "reason": reason.value,
+            "entities": metrics.entities_total if metrics else 0,
+            "entities_by_type": dict(metrics.by_type) if metrics else {},
+            "fields_filled_pct": metrics.fields_filled_pct if metrics else 0.0,
+            "conflicts_open": metrics.conflicts_open if metrics else 0,
+            "cost_usd": (
+                metrics.cost_usd_total if metrics else self._budget.total_spent()
+            ),
+            "budget_spent_usd": self._budget.total_spent(),
+            "wall_s": wall_s,
+            "subagent_calls_total": self._budget.subagent_calls_total,
+            "revisions_total": self._budget.revisions_total,
+            "mode": getattr(self._spec, "mode", "overwrite"),
+            "db_path": self._db_path,
+        }
+        if self._obsidian_writer is not None:
+            try:
+                summary["obsidian"] = {
+                    "root_dir": str(self._obsidian_writer.root_dir),
+                    "stats": self._obsidian_writer.stats,
+                }
+            except Exception:
+                summary["obsidian"] = {"stats": {"errors": 1}}
+        try:
+            council = await self._maybe_record_council_votes()
+            if council:
+                summary["verification_council_votes"] = council
+        except Exception:
+            pass
+        try:
+            await self._store.write_run_summary(self._run_id, summary)
+        except Exception:
+            pass
 
         await self._bus.emit(
             RunComplete(
@@ -702,7 +851,81 @@ class Orchestrator:
                     entities=(metrics.entities_total if metrics else 0),
                     cost_usd=(metrics.cost_usd_total if metrics else self._budget.total_spent()),
                     wall_s=wall_s,
-                    db_path="",
+                    db_path=self._db_path,
                 ),
             )
         )
+
+    async def _maybe_record_council_votes(self) -> int:
+        verification = getattr(self._spec, "verification", None)
+        if verification is None or getattr(verification, "mode", "standard") != "council":
+            return 0
+        models = list(getattr(verification, "models", []) or [])
+        if not models:
+            models = [
+                self._spec.models.get("fast")
+                or self._spec.models.get("smart")
+                or "council"
+            ]
+        threshold = float(getattr(verification, "confidence_threshold", 0.65))
+        required = {
+            f.name
+            for ent in self._spec.entities
+            for f in ent.fields
+            if getattr(f, "required", False)
+        }
+        rows = await self._store.query(  # type: ignore[attr-defined]
+            """
+            SELECT e.id AS entity_id, f.field_name AS field_name,
+                   f.value_json AS value_json, f.confidence AS confidence
+            FROM fields f
+            JOIN entities e ON e.id = f.entity_id
+            WHERE f.value_json != 'null'
+              AND (f.confidence < ? OR f.field_name IN (
+            """
+            + ",".join(["?"] * max(len(required), 1))
+            + "))",
+            tuple([threshold, *(required or {"__none__"})]),
+        )
+        count = 0
+        for row in rows:
+            value = row.get("value_json")
+            try:
+                value = __import__("json").loads(value)
+            except Exception:
+                pass
+            for model in models:
+                confidence = float(row.get("confidence") or 0.0)
+                disagreement = confidence < threshold
+                vote = {
+                    "vote_id": uuid4().hex,
+                    "run_id": self._run_id,
+                    "entity_id": row.get("entity_id"),
+                    "field_name": row.get("field_name"),
+                    "model": model,
+                    "vote": value,
+                    "confidence": confidence,
+                    "rationale": (
+                        "low-confidence field queued for review"
+                        if disagreement
+                        else "required field accepted"
+                    ),
+                }
+                await self._store.record_verification_vote(vote)
+                await self._bus.emit(
+                    VerificationVote(
+                        seq=0,
+                        ts=datetime.now(UTC),
+                        run_id=self._run_id,
+                        payload=VerificationVotePayload(
+                            entity_id=vote["entity_id"],
+                            field=vote["field_name"],
+                            model=model,
+                            vote=value,
+                            confidence=confidence,
+                            disagreement=disagreement,
+                        ),
+                    )
+                )
+                count += 1
+        return count

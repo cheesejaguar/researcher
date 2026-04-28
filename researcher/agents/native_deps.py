@@ -15,6 +15,7 @@ from researcher.fetch.http import HttpFetcher
 from researcher.llm.prompts import PromptRegistry
 from researcher.search.base import SearchProvider
 from researcher.skills.registry import SkillRegistry
+from researcher.spec import SourcePolicy
 
 
 @dataclass
@@ -26,3 +27,4 @@ class NativeAgentDeps:
     prompts: PromptRegistry
     max_fetch_per_task: int = 3  # cap HTTP fetches per single agent.run()
     skill_registry: SkillRegistry | None = None
+    source_policy: SourcePolicy | None = None

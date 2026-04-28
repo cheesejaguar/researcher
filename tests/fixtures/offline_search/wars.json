@@ -1,0 +1,51 @@
+{
+  "major interstate wars since 1500": [
+    {
+      "title": "World War II",
+      "url": "https://offline.local/wars/world-war-ii",
+      "snippet": "World War II was a global conflict from 1939 to 1945."
+    }
+  ],
+  "20th century wars": [
+    {
+      "title": "World War I",
+      "url": "https://offline.local/wars/world-war-i",
+      "snippet": "World War I lasted from 1914 to 1918."
+    }
+  ],
+  "European wars 1500-1900": [
+    {
+      "title": "World War I",
+      "url": "https://offline.local/wars/world-war-i",
+      "snippet": "World War I was a major European war."
+    }
+  ],
+  "Asian wars 20th century": [
+    {
+      "title": "World War II",
+      "url": "https://offline.local/wars/world-war-ii",
+      "snippet": "World War II included major Asian theaters."
+    }
+  ],
+  "Middle East wars modern": [
+    {
+      "title": "World War II",
+      "url": "https://offline.local/wars/world-war-ii",
+      "snippet": "World War II reshaped the modern Middle East."
+    }
+  ],
+  "World War I": [
+    {
+      "title": "World War I",
+      "url": "https://offline.local/wars/world-war-i",
+      "snippet": "World War I lasted from 1914 to 1918."
+    }
+  ],
+  "World War II": [
+    {
+      "title": "World War II",
+      "url": "https://offline.local/wars/world-war-ii",
+      "snippet": "World War II lasted from 1939 to 1945."
+    }
+  ]
+}

@@ -55,6 +55,10 @@ class Budget:
     def total_spent(self) -> float:
         return self._spent
 
+    @property
+    def cap(self) -> float:
+        return self._cap
+
     def remaining(self) -> float:
         return max(0.0, self._cap - self._spent)
 

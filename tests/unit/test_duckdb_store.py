@@ -251,6 +251,53 @@ async def test_write_run_summary(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_record_sources_and_verification_votes(tmp_path: Path):
+    store = DuckDBKnowledgeStore(db_path=tmp_path / "s.duckdb")
+    await store.open()
+    try:
+        await store.record_sources(
+            [
+                {
+                    "source_id": "s1",
+                    "title": "Source",
+                    "url": "file:///source.md",
+                    "source_type": "file",
+                    "path": "/source.md",
+                    "metadata": {"source_set": "local"},
+                }
+            ],
+            [
+                {
+                    "chunk_id": "s1:0",
+                    "source_id": "s1",
+                    "ordinal": 0,
+                    "text": "chunk text",
+                }
+            ],
+        )
+        await store.record_verification_vote(
+            {
+                "vote_id": "v1",
+                "run_id": "run-1",
+                "entity_id": "e1",
+                "field_name": "name",
+                "model": "m",
+                "vote": "ok",
+                "confidence": 0.8,
+                "rationale": "required field accepted",
+            }
+        )
+        sources = await store.query("SELECT source_id FROM sources")
+        chunks = await store.query("SELECT chunk_id FROM source_chunks")
+        votes = await store.query("SELECT vote_id FROM verification_votes")
+        assert sources == [{"source_id": "s1"}]
+        assert chunks == [{"chunk_id": "s1:0"}]
+        assert votes == [{"vote_id": "v1"}]
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_async_context_manager(tmp_path: Path):
     db_path = tmp_path / "s.duckdb"
     async with DuckDBKnowledgeStore(db_path=db_path) as store:

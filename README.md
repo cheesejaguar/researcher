@@ -134,30 +134,124 @@ uv sync
 cd tui && npm install && npm run build && cd ..
 ```
 
+`researcher watch` and auto-launched TUI runs will try to build the TUI when
+`tui/dist/index.js` is missing and `npm` is available. Building it once up
+front makes the first live attach faster.
+
+### Check your setup
+
+```bash
+# Validate Python, uv, Node/TUI, CLI backends, credentials, search, fixtures.
+uv run python -m researcher doctor --spec specs/wars.yaml
+
+# Machine-readable preflight for scripts/CI:
+uv run python -m researcher doctor --spec specs/wars.yaml --json
+```
+
+### Scaffold a new research spec
+
+```bash
+uv run python -m researcher init spec \
+  --spec-id companies \
+  --goal "Public AI infrastructure companies" \
+  --entity Company \
+  --seed "AI infrastructure public companies" \
+  --output specs/companies.yaml
+```
+
+Specs can also include source packs, source policy, batch items, report defaults,
+and opt-in council verification:
+
+```yaml
+source_sets:
+  - name: local-notes
+    paths: ["./notes", "./sources/report.md"]
+    urls: ["https://example.com/reference"]
+source_policy:
+  allow_domains: ["example.com"]
+  deny_domains: ["lowquality.example"]
+  trusted_domains: ["example.com"]
+items:
+  - { name: "Item to research" }
+report:
+  template: analyst
+  formats: ["md", "json"]
+verification:
+  mode: council
+  models: ["openrouter/hermes-3-8b", "openrouter/hermes-3-70b"]
+```
+
 ### Run a research job
 
 ```bash
+# Deterministic offline smoke. This forces the native fixture path and spends $0.
+uv run python -m researcher run specs/wars.yaml --offline --no-tui --fast-startup
+
 # Auto-detects claude / codex on $PATH; falls back to native OpenRouter path.
-uv run researcher run specs/wars.yaml
+uv run python -m researcher run specs/wars.yaml
 
 # With an Obsidian vault write-through:
-uv run researcher run specs/wars.yaml --obsidian-vault ~/Documents/ObsidianVault
+uv run python -m researcher run specs/wars.yaml --obsidian-vault ~/Documents/ObsidianVault
 
 # Force the CLI subagent path (raises if no CLI is detected):
-uv run researcher run specs/wars.yaml --backend cli
+uv run python -m researcher run specs/wars.yaml --backend cli
 
 # Force the native OpenRouter path (requires OPENROUTER_API_KEY):
-uv run researcher run specs/wars.yaml --backend api
+uv run python -m researcher run specs/wars.yaml --backend api
 
 # Custom run id + artifacts directory:
-uv run researcher run specs/wars.yaml --run-id wars-today --runs-dir ./my-runs
+uv run python -m researcher run specs/wars.yaml --run-id wars-today --runs-dir ./my-runs
+
+# Wide/batch mode from CSV or JSONL:
+uv run python -m researcher run specs/companies.yaml --items companies.csv --item-column name
 ```
 
 ### Watch a run in the TUI
 
 ```bash
-# Replay a completed run's events:
-cd tui && node dist/index.js --replay ../runs/wars-today/events.jsonl
+# Attach live. If events.jsonl already exists, watch replays history first,
+# then tails the Unix socket.
+uv run python -m researcher watch wars-today
+
+# Replay a completed run's events.
+uv run python -m researcher watch wars-today --replay
+```
+
+### Verify and use results
+
+```bash
+# Human-readable run summary.
+uv run python -m researcher inspect wars-today
+
+# JSON summary for automation.
+uv run python -m researcher inspect wars-today --json
+
+# v1 acceptance gate: entity count, field fill, cost, wall time.
+uv run python -m researcher accept wars-today
+
+# Export for non-SQL consumers.
+uv run python -m researcher export wars-today --format csv --output wars.csv
+uv run python -m researcher export wars-today --format markdown --output wars.md
+uv run python -m researcher export wars-today --format obsidian --output ./wars-vault
+
+# Citation audit and cited reports.
+uv run python -m researcher evidence wars-today --format csv --output evidence.csv
+uv run python -m researcher report wars-today --template analyst --format md --output report.md
+uv run python -m researcher report wars-today --template systematic --format html --output report.html
+
+# Source-pack operations.
+uv run python -m researcher sources build specs/wars.yaml --run-id wars-sources
+uv run python -m researcher sources inspect wars-today
+
+# Operator controls.
+uv run python -m researcher stop wars-today
+uv run python -m researcher resume wars-today
+
+# Downstream query surfaces.
+uv run python -m researcher runs list
+uv run python -m researcher runs search wars
+uv run python -m researcher graph wars-today
+uv run python -m researcher mcp --db runs/wars-today/store.duckdb
 ```
 
 ---
@@ -327,7 +421,7 @@ RESEARCHER_RUN_MANUAL=1 uv run pytest tests/manual/ -v
 
 1. Write a YAML spec at `specs/<name>.yaml` with the entity schema
 2. *Optionally* hand-author skill cards at `skills/<name>.yaml`
-3. Run: `uv run researcher run specs/<name>.yaml`
+3. Run: `uv run python -m researcher run specs/<name>.yaml`
 
 ---
 
@@ -345,17 +439,19 @@ RESEARCHER_RUN_MANUAL=1 uv run pytest tests/manual/ -v
 - ✅ FactWriter pipeline with type coercion + conflict detection
 - ✅ Budget discipline (USD + wall clock + sub-caps + subagent counter)
 - ✅ Obsidian write-through integration
-- ✅ Ink TUI with replay mode
+- ✅ Ink TUI with live socket attach, replay, coverage hints, and acceptance progress
+- ✅ `doctor`, `inspect`, `accept`, `export`, `evidence`, `report`, `stop`, and `resume` CLI surfaces
+- ✅ Source packs, source policy, run history, and wide/batch item mode
 - ✅ Fetch / search / extract stack (httpx / Tavily / Brave / Serper / trafilatura)
-- ✅ 303 tests (291 Python + 12 TypeScript), ruff clean
+- ✅ Python and TypeScript test suites, ruff clean
 - ✅ 2 example specs: `wars.yaml`, `glp1_trials.yaml`
 
 ### Wave 2 next up 🚧
 
-- 🚧 Wire real `OpenRouterClient` into the CLI run path (currently `StubLLMClient`)
-- 🚧 Wire real `LocalEmbedder` into the resolver (currently a hash-based placeholder)
-- 🚧 Wire `NativeAgentDeps` into `researcher run` so `--backend api` actually works
-- 🚧 `researcher watch <run_id>` live-attach via Unix socket (Ink TUI currently replay-only)
+- ✅ Real `OpenRouterClient` is wired into the CLI run path when `OPENROUTER_API_KEY` is set
+- ✅ Real `LocalEmbedder` is the default resolver embedder; use `--fast-startup` for hash embeddings
+- ✅ `NativeAgentDeps` are wired into `run`, so `--backend api` works when API/search credentials are available
+- ✅ `watch <run_id>` can replay completed runs or replay-then-tail live runs via Unix socket
 - 🚧 End-to-end tuning against the §11 success criteria (≥ 100 entities, ≥ 70% field-fill, < $3, < 10 min)
 
 ### Explicit v1 scope cuts 🗃️
