@@ -52,7 +52,14 @@ class StubCliRunner:
         tools: tuple[str, ...] = ("WebSearch", "WebFetch"),
     ) -> CliResult:
         key = _hash_prompt(prompt)
-        self.calls.append({"prompt_hash": key, "timeout_s": timeout_s, "tools": list(tools)})
+        self.calls.append(
+            {
+                "prompt_hash": key,
+                "prompt": prompt,
+                "timeout_s": timeout_s,
+                "tools": list(tools),
+            }
+        )
         return self._responses.get(key, self._default)
 
 

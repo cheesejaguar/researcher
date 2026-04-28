@@ -40,6 +40,11 @@ def test_runspec_defaults():
     assert s.distinct_pairs == []
     assert s.search.provider == "tavily"
     assert s.search.max_results == 10
+    assert s.source_sets == []
+    assert s.source_policy.deny_domains == []
+    assert s.items == []
+    assert s.report.template == "analyst"
+    assert s.verification.mode == "standard"
 
 
 def test_runspec_missing_required_raises():
@@ -107,6 +112,52 @@ def test_load_spec_reads_yaml(tmp_path: Path):
     assert s.search.api_key_env == "TAVILY_API_KEY"
     assert s.search.max_results == 8
     assert s.models["fast"] == "openrouter/hermes-3-8b"
+
+
+def test_runspec_competitor_gap_sections_parse(tmp_path: Path):
+    source_file = tmp_path / "source.md"
+    source_file.write_text("source text")
+    p = tmp_path / "with_sources.yaml"
+    p.write_text(
+        f"""
+spec_id: sourced
+goal: Source grounded run
+entities:
+  - name: Thing
+    fields:
+      - {{ name: name, type: str, required: true }}
+    search_templates: []
+seeds:
+  - "thing"
+source_sets:
+  - name: local
+    paths:
+      - "{source_file}"
+    urls:
+      - "https://example.com/source"
+source_policy:
+  allow_domains: ["example.com"]
+  deny_domains: ["bad.example"]
+  trusted_domains: ["example.com"]
+items:
+  - {{ name: "Item A", id: "a" }}
+report:
+  template: systematic
+  formats: ["md", "json"]
+verification:
+  mode: council
+  models: ["fast-a", "fast-b"]
+  confidence_threshold: 0.7
+models:
+  fast: m
+"""
+    )
+    s = load_spec(p)
+    assert s.source_sets[0].name == "local"
+    assert s.source_policy.trusted_domains == ["example.com"]
+    assert s.items[0]["name"] == "Item A"
+    assert s.report.template == "systematic"
+    assert s.verification.mode == "council"
 
 
 # ---------- build_entity_class ----------

@@ -165,6 +165,10 @@ class StubKnowledgeStore(KnowledgeStore):
     async def write_run_summary(self, run_id: str, summary: dict) -> None:
         self._run_summaries.append((run_id, summary))
 
+    @property
+    def run_summaries(self) -> list[tuple[str, dict]]:
+        return list(self._run_summaries)
+
     def set_cost(self, usd: float) -> None:
         """Test helper so orchestrator stop-checks can observe synthetic cost."""
         self._cost_usd = usd

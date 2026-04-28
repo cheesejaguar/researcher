@@ -27,6 +27,7 @@ from researcher.models import (
     Provenance,
     Task,
 )
+from researcher.sources import source_authority
 from researcher.storage.store import KnowledgeStore
 
 
@@ -78,6 +79,9 @@ class DiscoverAgent(Agent):
         await self.set_state(AgentState.FETCHING)
         fetched: list[tuple[str, str]] = []  # (url, text)
         for result in search_results[: self._deps.max_fetch_per_task]:
+            if result.url.startswith("file://") and result.snippet:
+                fetched.append((result.url, result.snippet))
+                continue
             fetch = await self._deps.http.fetch(result.url)
             if not fetch.ok or (not fetch.content and fetch.raw_bytes is None):
                 await self.log("info", f"skip {result.url}: {fetch.error}")
@@ -111,6 +115,17 @@ class DiscoverAgent(Agent):
             )
 
         entity_type = self._entity_schema.get("entity_type", "Entity")
+        skill_text = ""
+        if self._deps.skill_registry is not None:
+            fragments = [
+                c.prompt_fragment.strip()
+                for c in self._deps.skill_registry.cards_for_entity_type(entity_type)
+                if c.prompt_fragment.strip()
+            ]
+            if fragments:
+                skill_text = "\n\nDomain guidance:\n" + "\n".join(
+                    f"- {f}" for f in fragments
+                )
         combined_context = "\n\n---\n\n".join(
             f"SOURCE: {url}\n{body}" for url, body in fetched
         )
@@ -129,7 +144,7 @@ class DiscoverAgent(Agent):
                     f"Seed query: {query}\n"
                     f"Entity type: {entity_type}\n\n"
                     f"From the sources below, list the distinct {entity_type} "
-                    f"entity names you find.\n\n{combined_context}"
+                    f"entity names you find.{skill_text}\n\n{combined_context}"
                 ),
             },
         ]
@@ -155,6 +170,9 @@ class DiscoverAgent(Agent):
         claims: list[FactClaim] = []
         now = datetime.now(UTC)
         primary_url, primary_snippet = fetched[0]
+        confidence = 0.7
+        if self._deps.source_policy is not None:
+            confidence = min(0.95, 0.55 + 0.3 * source_authority(primary_url, self._deps.source_policy))
         for name in response.entities:
             name = (name or "").strip()
             if not name:
@@ -174,7 +192,7 @@ class DiscoverAgent(Agent):
                     entity_name=name,
                     field="name",
                     value=name,
-                    confidence=0.7,
+                    confidence=confidence,
                     provenance=prov,
                     emitted_by=self.agent_id,
                     task_id=task.id,

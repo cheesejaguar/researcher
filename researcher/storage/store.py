@@ -189,3 +189,14 @@ class KnowledgeStore(ABC):
         ``entity_relations`` upsert (higher-confidence wins on conflict).
         """
         return None
+
+    async def record_sources(self, sources: list[dict], chunks: list[dict]) -> None:
+        """Persist source-pack metadata and chunks.
+
+        Default: no-op for older stubs. DuckDBKnowledgeStore overrides.
+        """
+        return None
+
+    async def record_verification_vote(self, vote: dict) -> None:
+        """Persist an optional model-council vote row."""
+        return None

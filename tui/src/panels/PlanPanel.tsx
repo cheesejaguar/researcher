@@ -17,6 +17,9 @@ export function PlanPanel({ state }: Props): React.JSX.Element {
     state.currentCycle === null ? "-" : String(state.currentCycle);
   const pending =
     state.lastCycleStart === null ? "-" : String(state.lastCycleStart);
+  const entityProgress = `${Math.min(state.entitiesTotal, 100)}/100`;
+  const costProgress = `$${state.costUsd.toFixed(2)}/$3.00`;
+  const wallProgress = `${state.wallS.toFixed(0)}s/600s`;
 
   return (
     <Box
@@ -40,6 +43,14 @@ export function PlanPanel({ state }: Props): React.JSX.Element {
       </Text>
       <Text>
         subagent calls: <Text color="magenta">{state.subagentCalls}</Text>
+      </Text>
+      <Text dimColor>acceptance</Text>
+      <Text>
+        entities <Text color="green">{entityProgress}</Text> | cost{" "}
+        <Text color={state.costUsd <= 3 ? "green" : "red"}>{costProgress}</Text>
+      </Text>
+      <Text>
+        wall <Text color={state.wallS <= 600 ? "green" : "red"}>{wallProgress}</Text>
       </Text>
     </Box>
   );

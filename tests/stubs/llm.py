@@ -41,7 +41,15 @@ class StubLLMClient(LLMClient):
         max_tokens: int | None = None,
     ) -> LLMResponse:
         key = self.content_hash(messages, tier)
-        self.calls.append({"kind": "complete", "tier": tier.value, "task_id": task_id, "hash": key})
+        self.calls.append(
+            {
+                "kind": "complete",
+                "tier": tier.value,
+                "task_id": task_id,
+                "hash": key,
+                "messages": messages,
+            }
+        )
         if key in self._cassettes:
             entry = self._cassettes[key]
             return LLMResponse(
@@ -76,7 +84,13 @@ class StubLLMClient(LLMClient):
     ) -> T:
         key = self.content_hash(messages, tier)
         self.calls.append(
-            {"kind": "structured", "tier": tier.value, "task_id": task_id, "hash": key}
+            {
+                "kind": "structured",
+                "tier": tier.value,
+                "task_id": task_id,
+                "hash": key,
+                "messages": messages,
+            }
         )
         if key in self._cassettes:
             return schema.model_validate(self._cassettes[key]["data"])

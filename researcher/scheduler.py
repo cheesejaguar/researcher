@@ -36,9 +36,11 @@ class Scheduler:
         from datetime import datetime, timedelta
 
         deadline = datetime.now(UTC) + timedelta(seconds=self._spec.wall_limit_s)
-        per_task_budget = self._spec.budget_usd / max(len(self._spec.seeds), 1) / 10
+        item_queries = [_query_for_item(item) for item in getattr(self._spec, "items", [])]
+        queries = [*self._spec.seeds, *item_queries]
+        per_task_budget = self._spec.budget_usd / max(len(queries), 1) / 10
         tasks: list[Task] = []
-        for seed in self._spec.seeds:
+        for seed in queries:
             tasks.append(
                 Task(
                     kind=TaskKind.DISCOVER,
@@ -155,3 +157,11 @@ class Scheduler:
     @property
     def pending(self) -> int:
         return len(self._queue)
+
+
+def _query_for_item(item: dict) -> str:
+    for key in ("name", "title", "id"):
+        value = item.get(key)
+        if value:
+            return str(value)
+    return " ".join(str(v) for v in item.values() if v)

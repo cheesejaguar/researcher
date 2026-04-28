@@ -72,7 +72,15 @@ export const BudgetWarningPayload = z.object({
 });
 
 export const RunCompletePayload = z.object({
-  reason: z.enum(["budget", "plateau", "ctrl_c", "error", "deadline"]),
+  reason: z.enum([
+    "budget",
+    "plateau",
+    "ctrl_c",
+    "error",
+    "deadline",
+    "no_tasks",
+    "subagent_cap",
+  ]),
   entities: z.number().int(),
   cost_usd: z.number(),
   wall_s: z.number(),
@@ -98,6 +106,30 @@ export const CoverageReportPayload = z.object({
   next_recommended_seeds: z.array(z.string()),
 });
 
+export const SourcePackPayload = z.object({
+  sources: z.number().int(),
+  chunks: z.number().int(),
+});
+
+export const VerificationVotePayload = z.object({
+  entity_id: z.string().nullable().optional(),
+  field: z.string(),
+  model: z.string(),
+  vote: z.unknown(),
+  confidence: z.number(),
+  disagreement: z.boolean().default(false),
+});
+
+export const InterruptRequestedPayload = z.object({
+  point: z.string(),
+  context: z.record(z.string(), z.unknown()).default({}),
+});
+
+export const InterruptResolvedPayload = z.object({
+  point: z.string(),
+  decision: z.enum(["continue", "abort"]),
+});
+
 // ---------- Event envelope ----------
 
 const base = {
@@ -118,7 +150,11 @@ export const CostUpdate = z.object({ type: z.literal("cost_update"), ...base, pa
 export const BudgetWarning = z.object({ type: z.literal("budget_warning"), ...base, payload: BudgetWarningPayload });
 export const RunComplete = z.object({ type: z.literal("run_complete"), ...base, payload: RunCompletePayload });
 export const SubagentCall = z.object({ type: z.literal("subagent_call"), ...base, payload: SubagentCallPayload });
+export const InterruptRequested = z.object({ type: z.literal("interrupt_requested"), ...base, payload: InterruptRequestedPayload });
+export const InterruptResolved = z.object({ type: z.literal("interrupt_resolved"), ...base, payload: InterruptResolvedPayload });
 export const CoverageReport = z.object({ type: z.literal("coverage_report"), ...base, payload: CoverageReportPayload });
+export const SourcePackLoaded = z.object({ type: z.literal("source_pack_loaded"), ...base, payload: SourcePackPayload });
+export const VerificationVote = z.object({ type: z.literal("verification_vote"), ...base, payload: VerificationVotePayload });
 
 export const Event = z.discriminatedUnion("type", [
   CycleStart,
@@ -133,7 +169,11 @@ export const Event = z.discriminatedUnion("type", [
   BudgetWarning,
   RunComplete,
   SubagentCall,
+  InterruptRequested,
+  InterruptResolved,
   CoverageReport,
+  SourcePackLoaded,
+  VerificationVote,
 ]);
 
 export type Event = z.infer<typeof Event>;
@@ -149,7 +189,11 @@ export type CostUpdate = z.infer<typeof CostUpdate>;
 export type BudgetWarning = z.infer<typeof BudgetWarning>;
 export type RunComplete = z.infer<typeof RunComplete>;
 export type SubagentCall = z.infer<typeof SubagentCall>;
+export type InterruptRequested = z.infer<typeof InterruptRequested>;
+export type InterruptResolved = z.infer<typeof InterruptResolved>;
 export type CoverageReport = z.infer<typeof CoverageReport>;
+export type SourcePackLoaded = z.infer<typeof SourcePackLoaded>;
+export type VerificationVote = z.infer<typeof VerificationVote>;
 
 export function parseEvent(raw: unknown): Event {
   return Event.parse(raw);

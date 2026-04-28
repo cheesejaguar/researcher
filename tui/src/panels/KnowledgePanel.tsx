@@ -26,6 +26,9 @@ function renderValue(value: unknown): string {
 
 export function KnowledgePanel({ state }: Props): React.JSX.Element {
   const facts: FactEntry[] = state.recentFacts;
+  const lowFields = Object.entries(state.fieldsBelowConfidence)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3);
 
   return (
     <Box
@@ -40,6 +43,46 @@ export function KnowledgePanel({ state }: Props): React.JSX.Element {
       <Text>
         entities total: <Text color="yellow">{state.entitiesTotal}</Text>
       </Text>
+      <Text>
+        open conflicts: <Text color={state.coverageConflictsOpen > 0 ? "red" : "green"}>
+          {state.coverageConflictsOpen}
+        </Text>
+      </Text>
+      {(state.sourcePackSources > 0 || state.sourcePackChunks > 0) && (
+        <Text>
+          sources: <Text color="cyan">{state.sourcePackSources}</Text> / chunks{" "}
+          <Text color="cyan">{state.sourcePackChunks}</Text>
+        </Text>
+      )}
+      {state.verificationVotes.length > 0 && (
+        <Text>
+          council: <Text color="cyan">{state.verificationVotes.length}</Text> votes /{" "}
+          <Text color={state.verificationDisagreements > 0 ? "red" : "green"}>
+            {state.verificationDisagreements}
+          </Text>{" "}
+          disagreements
+        </Text>
+      )}
+      <Text dimColor>report: researcher report {state.runId || "<run_id>"}</Text>
+      <Text dimColor>evidence: researcher evidence {state.runId || "<run_id>"}</Text>
+      {lowFields.length > 0 && (
+        <Text>
+          low confidence:{" "}
+          <Text color="yellow">
+            {lowFields.map(([field, count]) => `${field}:${count}`).join(", ")}
+          </Text>
+        </Text>
+      )}
+      {state.coverageRecommendations.length > 0 && (
+        <>
+          <Text dimColor>next seeds</Text>
+          {state.coverageRecommendations.slice(0, 3).map((seed, i) => (
+            <Text key={`${i}-${seed}`} color="magenta">
+              {seed}
+            </Text>
+          ))}
+        </>
+      )}
       <Text dimColor>recent facts</Text>
       {facts.length === 0 ? (
         <Text dimColor>-</Text>

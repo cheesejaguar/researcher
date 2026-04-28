@@ -15,6 +15,7 @@ from researcher.fetch.http import FetchResult
 from researcher.llm.prompts import default_registry
 from researcher.models import AgentState, FactClaim, Task, TaskKind
 from researcher.search.base import SearchResult
+from researcher.skills.registry import SkillRegistry
 from tests.stubs.bus import StubEventBus
 from tests.stubs.llm import StubLLMClient
 from tests.stubs.store import StubKnowledgeStore
@@ -43,6 +44,7 @@ def _entity_schema() -> dict:
 def _make_deps(
     search_results: list[SearchResult],
     fetch_results: list[FetchResult] | None = None,
+    skill_registry: SkillRegistry | None = None,
 ) -> NativeAgentDeps:
     search = MagicMock()
     search.name = "mock"
@@ -67,6 +69,7 @@ def _make_deps(
         http=http,
         prompts=default_registry(),
         max_fetch_per_task=3,
+        skill_registry=skill_registry,
     )
 
 
@@ -209,3 +212,37 @@ async def test_discover_emits_state_transitions() -> None:
     assert ("planning", "fetching") in transitions
     assert ("fetching", "extracting") in transitions
     assert ("extracting", "done") in transitions
+
+
+@pytest.mark.asyncio
+async def test_discover_prompt_includes_matching_skill_guidance() -> None:
+    search_results = [
+        SearchResult(title="WW2", url="https://example.com/a", snippet="", rank=0),
+    ]
+    registry = SkillRegistry()
+    registry.load_dir("skills")
+    deps = _make_deps(search_results, skill_registry=registry)
+    llm = StubLLMClient()
+    bus = StubEventBus()
+    store = StubKnowledgeStore()
+
+    agent = DiscoverAgent(
+        agent_id="native-abc",
+        llm=llm,
+        store=store,
+        emit=bus.emit,
+        run_id="run-x",
+        deps=deps,
+        entity_schema=_entity_schema(),
+        goal="Wars",
+    )
+
+    await agent.run(_sample_task())
+
+    assert llm.calls
+    user_messages = [
+        m["content"]
+        for m in llm.calls[0]["messages"]
+        if m.get("role") == "user"
+    ]
+    assert any("Wikipedia infobox" in msg for msg in user_messages)

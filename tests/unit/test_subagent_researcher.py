@@ -1,14 +1,16 @@
 """Tests for SubagentResearcher — the Agent subclass that drives CLI runners."""
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
 from researcher.agents.subagent import SubagentResearcher
-from researcher.backends.models import CliKind
+from researcher.backends.models import CliKind, CliResult, SubagentResponse
 from researcher.budget import Budget
 from researcher.events import AgentLog, AgentStateChange, SubagentCall
 from researcher.models import AgentState, Task, TaskKind
+from researcher.skills.registry import SkillRegistry
 from tests.stubs.bus import StubEventBus
 from tests.stubs.cli_runner import (
     StubCliRunner,
@@ -31,7 +33,11 @@ def _sample_task() -> Task:
     )
 
 
-def _make_agent(runner: StubCliRunner, budget: Budget | None = None) -> tuple[SubagentResearcher, StubEventBus]:
+def _make_agent(
+    runner: StubCliRunner,
+    budget: Budget | None = None,
+    skill_registry: SkillRegistry | None = None,
+) -> tuple[SubagentResearcher, StubEventBus]:
     bus = StubEventBus()
     llm = StubLLMClient()
     store = StubKnowledgeStore()
@@ -57,6 +63,7 @@ def _make_agent(runner: StubCliRunner, budget: Budget | None = None) -> tuple[Su
         entity_schema=entity_schema,
         budget=budget,
         goal="Major interstate wars",
+        skill_registry=skill_registry,
     )
     return agent, bus
 
@@ -78,6 +85,70 @@ async def test_run_maps_extractions_to_fact_claims():
         assert claim.entity_name == "World War II"
         assert claim.provenance.url.startswith("https://")
         assert 0.0 <= claim.confidence <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_run_maps_multiple_entities_to_fact_claims():
+    runner = StubCliRunner()
+    runner.add_response_for_any(
+        CliResult(
+            ok=True,
+            data=SubagentResponse.model_validate(
+                {
+                    "entities": [
+                        {
+                            "entity_name": "World War I",
+                            "extractions": [
+                                {
+                                    "field": "name",
+                                    "value": "World War I",
+                                    "source_url": "https://example.com/wwi",
+                                    "snippet": "World War I",
+                                    "confidence": 0.9,
+                                }
+                            ],
+                        },
+                        {
+                            "entity_name": "World War II",
+                            "extractions": [
+                                {
+                                    "field": "name",
+                                    "value": "World War II",
+                                    "source_url": "https://example.com/wwii",
+                                    "snippet": "World War II",
+                                    "confidence": 0.95,
+                                }
+                            ],
+                        },
+                    ]
+                }
+            ),
+            wall_ms=100,
+            exit_code=0,
+        )
+    )
+    agent, bus = _make_agent(runner)
+
+    result = await agent.run(_sample_task())
+
+    assert result.state == AgentState.DONE
+    assert [c.entity_name for c in result.claims] == ["World War I", "World War II"]
+    subagent_events = [e for e in bus.events if isinstance(e, SubagentCall)]
+    assert subagent_events[0].payload.claims_emitted == 2
+
+
+@pytest.mark.asyncio
+async def test_prompt_includes_matching_skill_card_guidance():
+    runner = StubCliRunner()
+    runner.add_response_for_any(make_empty_result())
+    registry = SkillRegistry()
+    registry.load_dir(Path("skills"))
+    agent, _ = _make_agent(runner, skill_registry=registry)
+
+    await agent.run(_sample_task())
+
+    assert runner.calls
+    assert "Wikipedia infobox" in runner.calls[0]["prompt"]
 
 
 @pytest.mark.asyncio

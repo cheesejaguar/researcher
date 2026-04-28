@@ -35,6 +35,13 @@ export interface LogEntry {
   msg: string;
 }
 
+export interface VerificationVoteEntry {
+  field: string;
+  model: string;
+  confidence: number;
+  disagreement: boolean;
+}
+
 export interface AppState {
   runId: string;
   cycles: number;
@@ -53,6 +60,15 @@ export interface AppState {
   subagentCalls: number;
   lastEventTs: string | null;
   eventsSeen: number;
+  entitiesByType: Record<string, number>;
+  fieldsBelowConfidence: Record<string, number>;
+  coverageRecommendations: string[];
+  coverageConflictsOpen: number;
+  sourceTypeBreakdown: Record<string, number>;
+  sourcePackSources: number;
+  sourcePackChunks: number;
+  verificationVotes: VerificationVoteEntry[];
+  verificationDisagreements: number;
 }
 
 export const MAX_RECENT_FACTS = 10;
@@ -77,6 +93,15 @@ export function initialState(): AppState {
     subagentCalls: 0,
     lastEventTs: null,
     eventsSeen: 0,
+    entitiesByType: {},
+    fieldsBelowConfidence: {},
+    coverageRecommendations: [],
+    coverageConflictsOpen: 0,
+    sourceTypeBreakdown: {},
+    sourcePackSources: 0,
+    sourcePackChunks: 0,
+    verificationVotes: [],
+    verificationDisagreements: 0,
   };
 }
 
@@ -198,6 +223,64 @@ export function reduce(state: AppState, event: Event): AppState {
       return {
         ...base,
         subagentCalls: state.subagentCalls + 1,
+      };
+    }
+
+    case "interrupt_requested": {
+      const entry: LogEntry = {
+        agentId: "orchestrator",
+        level: "warn",
+        msg: `interrupt requested: ${event.payload.point}`,
+      };
+      return {
+        ...base,
+        recentLogs: [...state.recentLogs, entry].slice(-MAX_RECENT_LOGS),
+      };
+    }
+
+    case "interrupt_resolved": {
+      const entry: LogEntry = {
+        agentId: "orchestrator",
+        level: event.payload.decision === "continue" ? "info" : "warn",
+        msg: `interrupt ${event.payload.point}: ${event.payload.decision}`,
+      };
+      return {
+        ...base,
+        recentLogs: [...state.recentLogs, entry].slice(-MAX_RECENT_LOGS),
+      };
+    }
+
+    case "coverage_report": {
+      return {
+        ...base,
+        entitiesByType: event.payload.entities_by_type,
+        fieldsBelowConfidence: event.payload.fields_below_confidence,
+        coverageRecommendations: event.payload.next_recommended_seeds,
+        coverageConflictsOpen: event.payload.conflicts_open,
+        sourceTypeBreakdown: event.payload.source_type_breakdown,
+      };
+    }
+
+    case "source_pack_loaded": {
+      return {
+        ...base,
+        sourcePackSources: event.payload.sources,
+        sourcePackChunks: event.payload.chunks,
+      };
+    }
+
+    case "verification_vote": {
+      const vote: VerificationVoteEntry = {
+        field: event.payload.field,
+        model: event.payload.model,
+        confidence: event.payload.confidence,
+        disagreement: event.payload.disagreement,
+      };
+      return {
+        ...base,
+        verificationVotes: [...state.verificationVotes, vote].slice(-20),
+        verificationDisagreements:
+          state.verificationDisagreements + (vote.disagreement ? 1 : 0),
       };
     }
 

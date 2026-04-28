@@ -4,10 +4,8 @@
  *
  * Usage:
  *   researcher-tui --replay <path/to/events.jsonl>   # replay a finished run
- *   researcher-tui --socket <path/to/sock>           # live-attach (Wave 2)
- *
- * For now only --replay is implemented; --socket throws with a friendly
- * error pointing at the JSONL transport.
+ *   researcher-tui --socket <path/to/sock>           # live attach
+ *   researcher-tui --replay <events.jsonl> --socket <sock>
  */
 
 import React from "react";
@@ -45,11 +43,12 @@ function printHelp(): void {
     "",
     "Usage:",
     "  researcher-tui --replay <events.jsonl>",
-    "  researcher-tui --socket <path>   (not yet implemented)",
+    "  researcher-tui --socket <path>",
+    "  researcher-tui --replay <events.jsonl> --socket <path>",
     "",
     "Flags:",
     "  --replay <path>   Replay a pre-recorded JSONL event file",
-    "  --socket <path>   Attach to a live orchestrator socket (Wave 2)",
+    "  --socket <path>   Attach to a live orchestrator socket",
     "  -h, --help        Show this message",
   ].join("\n");
   // eslint-disable-next-line no-console
@@ -66,7 +65,14 @@ function main(): void {
   }
 
   let eventSource: () => AsyncIterable<Event>;
-  if (args.replay) {
+  if (args.replay && args.socket) {
+    const replayPath = args.replay;
+    const socketPath = args.socket;
+    eventSource = async function* replayThenSocket(): AsyncIterable<Event> {
+      yield* readJsonlEvents(replayPath);
+      yield* readSocketEvents({ socketPath });
+    };
+  } else if (args.replay) {
     const path = args.replay;
     eventSource = () => readJsonlEvents(path);
   } else if (args.socket) {

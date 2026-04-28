@@ -59,6 +59,10 @@ describe("initialState", () => {
     expect(s.stopReason).toBeNull();
     expect(s.subagentCalls).toBe(0);
     expect(s.eventsSeen).toBe(0);
+    expect(s.coverageRecommendations).toEqual([]);
+    expect(s.fieldsBelowConfidence).toEqual({});
+    expect(s.sourcePackSources).toBe(0);
+    expect(s.verificationDisagreements).toBe(0);
   });
 });
 
@@ -175,6 +179,32 @@ describe("reduce", () => {
     expect(s.wallS).toBe(123.4);
   });
 
+  it("run_complete accepts no_tasks and subagent_cap reasons", () => {
+    const noTasks = reduce(
+      initialState(),
+      mkEvent("run_complete", {
+        reason: "no_tasks",
+        entities: 0,
+        cost_usd: 0,
+        wall_s: 1,
+        db_path: "runs/run-test/store.duckdb",
+      }),
+    );
+    expect(noTasks.stopReason).toBe("no_tasks");
+
+    const capped = reduce(
+      initialState(),
+      mkEvent("run_complete", {
+        reason: "subagent_cap",
+        entities: 1,
+        cost_usd: 0,
+        wall_s: 1,
+        db_path: "runs/run-test/store.duckdb",
+      }),
+    );
+    expect(capped.stopReason).toBe("subagent_cap");
+  });
+
   it("subagent_call increments subagentCalls", () => {
     const s = reduce(
       initialState(),
@@ -188,6 +218,76 @@ describe("reduce", () => {
       }),
     );
     expect(s.subagentCalls).toBe(1);
+  });
+
+  it("interrupt events are surfaced as logs", () => {
+    let s: AppState = initialState();
+    s = reduce(
+      s,
+      mkEvent("interrupt_requested", {
+        point: "after_cycle_end",
+        context: { cycle: 1 },
+      }),
+    );
+    s = reduce(
+      s,
+      mkEvent("interrupt_resolved", {
+        point: "after_cycle_end",
+        decision: "continue",
+      }),
+    );
+    expect(s.recentLogs.map((l) => l.msg)).toEqual([
+      "interrupt requested: after_cycle_end",
+      "interrupt after_cycle_end: continue",
+    ]);
+  });
+
+  it("coverage_report updates coverage dashboard state", () => {
+    const s = reduce(
+      initialState(),
+      mkEvent("coverage_report", {
+        cycle: 1,
+        entities_by_type: { War: 3 },
+        fields_below_confidence: { outcome: 2 },
+        confidence_threshold: 0.5,
+        conflicts_open: 1,
+        source_type_breakdown: { http: 4 },
+        next_recommended_seeds: ["verify low-confidence fields: outcome"],
+      }),
+    );
+    expect(s.eventsSeen).toBe(1);
+    expect(s.runId).toBe("run-test");
+    expect(s.entitiesByType).toEqual({ War: 3 });
+    expect(s.fieldsBelowConfidence).toEqual({ outcome: 2 });
+    expect(s.coverageConflictsOpen).toBe(1);
+    expect(s.coverageRecommendations).toEqual([
+      "verify low-confidence fields: outcome",
+    ]);
+  });
+
+  it("source and verification events update readiness state", () => {
+    let s = reduce(
+      initialState(),
+      mkEvent("source_pack_loaded", {
+        sources: 2,
+        chunks: 5,
+      }),
+    );
+    s = reduce(
+      s,
+      mkEvent("verification_vote", {
+        entity_id: "e1",
+        field: "outcome",
+        model: "m1",
+        vote: "uncertain",
+        confidence: 0.4,
+        disagreement: true,
+      }),
+    );
+    expect(s.sourcePackSources).toBe(2);
+    expect(s.sourcePackChunks).toBe(5);
+    expect(s.verificationVotes.length).toBe(1);
+    expect(s.verificationDisagreements).toBe(1);
   });
 });
 

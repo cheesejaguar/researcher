@@ -28,6 +28,7 @@ from researcher.models import (
     Provenance,
     Task,
 )
+from researcher.sources import source_authority
 from researcher.storage.store import KnowledgeStore
 
 _TYPE_MAP: dict[str, type] = {
@@ -138,6 +139,9 @@ class ExpandAgent(Agent):
         await self.set_state(AgentState.FETCHING)
         fetched: list[tuple[str, str]] = []
         for result in search_results[: self._deps.max_fetch_per_task]:
+            if result.url.startswith("file://") and result.snippet:
+                fetched.append((result.url, result.snippet))
+                continue
             fetch = await self._deps.http.fetch(result.url)
             if not fetch.ok or (not fetch.content and fetch.raw_bytes is None):
                 continue
@@ -170,6 +174,17 @@ class ExpandAgent(Agent):
         context = (
             "\n\n---\n\n".join(f"SOURCE: {url}\n{body}" for url, body in fetched) or "(no sources)"
         )
+        skill_text = ""
+        if self._deps.skill_registry is not None:
+            fragments = [
+                c.prompt_fragment.strip()
+                for c in self._deps.skill_registry.cards_for_entity_type(entity_type)
+                if c.prompt_fragment.strip()
+            ]
+            if fragments:
+                skill_text = "\n\nDomain guidance:\n" + "\n".join(
+                    f"- {f}" for f in fragments
+                )
 
         messages = [
             {
@@ -185,7 +200,8 @@ class ExpandAgent(Agent):
                 "content": (
                     f"Goal: {self._goal}\n"
                     f"Entity: {entity_name} ({entity_type})\n"
-                    f"Fields to fill: {', '.join(allowed_fields) if allowed_fields else 'all'}\n\n"
+                    f"Fields to fill: {', '.join(allowed_fields) if allowed_fields else 'all'}"
+                    f"{skill_text}\n\n"
                     f"Sources:\n{context}"
                 ),
             },
@@ -213,6 +229,9 @@ class ExpandAgent(Agent):
         now = datetime.now(UTC)
         primary_url = fetched[0][0] if fetched else "native://no-source"
         primary_snippet = fetched[0][1][:500] if fetched else ""
+        confidence = 0.8
+        if self._deps.source_policy is not None:
+            confidence = min(0.95, 0.6 + 0.3 * source_authority(primary_url, self._deps.source_policy))
 
         payload = response.model_dump() if isinstance(response, BaseModel) else dict(response)
 
@@ -263,7 +282,7 @@ class ExpandAgent(Agent):
                     entity_name=str(entity_name),
                     field=field_name,
                     value=value,
-                    confidence=0.8,
+                    confidence=confidence,
                     provenance=prov,
                     emitted_by=self.agent_id,
                     task_id=task.id,

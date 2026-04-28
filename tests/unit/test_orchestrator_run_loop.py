@@ -6,7 +6,15 @@ import pytest
 from researcher.backends.models import CliResult
 from researcher.backends.resolver import BackendResolver
 from researcher.budget import Budget
-from researcher.events import CycleEnd, CycleStart, RunComplete, SubagentCall
+from researcher.events import (
+    AgentSpawn,
+    BudgetWarning,
+    CostUpdate,
+    CycleEnd,
+    CycleStart,
+    RunComplete,
+    SubagentCall,
+)
 from researcher.orchestrator import Orchestrator, StopReason
 from researcher.scheduler import Scheduler
 from researcher.spec import EntitySpec, FieldSpec, RunSpec
@@ -117,6 +125,9 @@ async def test_run_dispatches_subagent_and_submits_claims_to_writer():
     # At least one SubagentCall event on the bus.
     subagent_events = [e for e in bus.events if isinstance(e, SubagentCall)]
     assert len(subagent_events) >= 1
+    spawn_events = [e for e in bus.events if isinstance(e, AgentSpawn)]
+    assert spawn_events
+    assert spawn_events[0].payload.kind == "subagent"
 
 
 @pytest.mark.asyncio
@@ -224,3 +235,59 @@ async def test_run_quiesces_writer_between_cycles():
     # Writer task should be done (drained at end of run).
     assert writer._task is not None
     assert writer._task.done()
+
+
+@pytest.mark.asyncio
+async def test_run_syncs_budget_from_store_metrics_and_warns():
+    runner = StubCliRunner()
+    runner.add_response_for_any(make_wars_discover_result())
+    spec = _sample_spec(policy="auto")
+    budget = Budget(usd_cap=1.0, wall_cap_s=600)
+    orch, bus, store, _writer = await _make_orchestrator(
+        spec, runner=runner, budget=budget
+    )
+    store.set_cost(0.6)
+
+    reason = await orch.run()
+
+    assert reason != StopReason.ERROR
+    assert budget.total_spent() == pytest.approx(0.6)
+    assert any(isinstance(e, CostUpdate) for e in bus.events)
+    warnings = [e for e in bus.events if isinstance(e, BudgetWarning)]
+    assert len(warnings) == 1
+    assert warnings[0].payload.fraction == 0.5
+
+
+@pytest.mark.asyncio
+async def test_run_stops_when_synced_budget_exceeds_cap():
+    runner = StubCliRunner()
+    runner.add_response_for_any(make_wars_discover_result())
+    spec = _sample_spec(policy="auto")
+    budget = Budget(usd_cap=1.0, wall_cap_s=600)
+    orch, _bus, store, _writer = await _make_orchestrator(
+        spec, runner=runner, budget=budget
+    )
+    store.set_cost(1.0)
+
+    reason = await orch.run()
+
+    assert reason == StopReason.BUDGET
+    assert budget.total_spent() == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_run_persists_summary_and_run_complete_db_path():
+    runner = StubCliRunner()
+    runner.add_response_for_any(make_wars_discover_result())
+    spec = _sample_spec(policy="auto")
+    orch, bus, store, _writer = await _make_orchestrator(spec, runner=runner)
+    orch._db_path = "/tmp/store.duckdb"  # type: ignore[attr-defined]
+
+    await orch.run()
+
+    assert store.run_summaries
+    summary = store.run_summaries[-1][1]
+    assert summary["run_id"] == "run-x"
+    assert summary["db_path"] == "/tmp/store.duckdb"
+    completes = [e for e in bus.events if isinstance(e, RunComplete)]
+    assert completes[-1].payload.db_path == "/tmp/store.duckdb"

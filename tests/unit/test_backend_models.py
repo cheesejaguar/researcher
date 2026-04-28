@@ -9,6 +9,7 @@ from researcher.backends.models import (
     CliKind,
     CliResult,
     Extraction,
+    SubagentEntity,
     SubagentResponse,
 )
 
@@ -30,20 +31,80 @@ def test_extraction_confidence_bounds():
 
 def test_subagent_response_happy_path():
     r = SubagentResponse(
-        entity_name="WWII",
-        extractions=[
-            Extraction(
-                field="start_year",
-                value=1939,
-                source_url="https://example.com/wwii",
-                snippet="World War II began in 1939...",
-                confidence=0.95,
+        entities=[
+            SubagentEntity(
+                entity_name="WWII",
+                extractions=[
+                    Extraction(
+                        field="start_year",
+                        value=1939,
+                        source_url="https://example.com/wwii",
+                        snippet="World War II began in 1939...",
+                        confidence=0.95,
+                    )
+                ],
             )
         ],
         diagnostics="found via wikipedia",
     )
     assert r.entity_name == "WWII"
     assert len(r.extractions) == 1
+
+
+def test_subagent_response_accepts_legacy_single_entity_shape():
+    r = SubagentResponse.model_validate(
+        {
+            "entity_name": "WWII",
+            "extractions": [
+                {
+                    "field": "start_year",
+                    "value": 1939,
+                    "source_url": "https://example.com/wwii",
+                    "snippet": "World War II began in 1939...",
+                    "confidence": 0.95,
+                }
+            ],
+            "diagnostics": "legacy fixture",
+        }
+    )
+    assert len(r.entities) == 1
+    assert r.entities[0].entity_name == "WWII"
+    assert r.extractions[0].field == "start_year"
+
+
+def test_subagent_response_supports_multiple_entities():
+    r = SubagentResponse.model_validate(
+        {
+            "entities": [
+                {
+                    "entity_name": "World War I",
+                    "extractions": [
+                        {
+                            "field": "name",
+                            "value": "World War I",
+                            "source_url": "https://example.com/wwi",
+                            "snippet": "World War I",
+                            "confidence": 0.9,
+                        }
+                    ],
+                },
+                {
+                    "entity_name": "World War II",
+                    "extractions": [
+                        {
+                            "field": "name",
+                            "value": "World War II",
+                            "source_url": "https://example.com/wwii",
+                            "snippet": "World War II",
+                            "confidence": 0.95,
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+    assert [e.entity_name for e in r.entities] == ["World War I", "World War II"]
+    assert len(r.extractions) == 2
 
 
 def test_cli_result_ok_shape():

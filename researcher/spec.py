@@ -94,6 +94,35 @@ class SearchConfig(BaseModel):
     adaptive: bool = False
 
 
+class SourceSet(BaseModel):
+    """User-provided source pack declared in a RunSpec."""
+
+    name: str
+    paths: list[str] = Field(default_factory=list)
+    urls: list[str] = Field(default_factory=list)
+    crawl_domains: list[str] = Field(default_factory=list)
+
+
+class SourcePolicy(BaseModel):
+    """Coarse source controls for search/fetch/report confidence."""
+
+    allow_domains: list[str] = Field(default_factory=list)
+    deny_domains: list[str] = Field(default_factory=list)
+    trusted_domains: list[str] = Field(default_factory=list)
+    require_trusted: bool = False
+
+
+class ReportConfig(BaseModel):
+    template: Literal["analyst", "systematic", "brief"] = "analyst"
+    formats: list[Literal["md", "html", "json"]] = Field(default_factory=lambda: ["md"])
+
+
+class VerificationConfig(BaseModel):
+    mode: Literal["standard", "council"] = "standard"
+    models: list[str] = Field(default_factory=list)
+    confidence_threshold: float = 0.65
+
+
 class RunSpec(BaseModel):
     spec_id: str
     goal: str
@@ -101,6 +130,11 @@ class RunSpec(BaseModel):
     seeds: list[str]
     search: SearchConfig = Field(default_factory=SearchConfig)
     domain_allowlist: list[str] = Field(default_factory=list)
+    source_sets: list[SourceSet] = Field(default_factory=list)
+    source_policy: SourcePolicy = Field(default_factory=SourcePolicy)
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    report: ReportConfig = Field(default_factory=ReportConfig)
+    verification: VerificationConfig = Field(default_factory=VerificationConfig)
     distinct_pairs: list[tuple[str, str]] = Field(default_factory=list)
     budget_usd: float = 3.0
     wall_limit_s: int = 600

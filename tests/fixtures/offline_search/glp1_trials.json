@@ -1,0 +1,58 @@
+{
+  "GLP-1 receptor agonist phase 3 trials since 2020": [
+    {
+      "title": "STEP 1",
+      "url": "https://offline.local/glp1/step-1",
+      "snippet": "STEP 1 evaluated semaglutide for obesity."
+    }
+  ],
+  "semaglutide clinical trials": [
+    {
+      "title": "STEP 1",
+      "url": "https://offline.local/glp1/step-1",
+      "snippet": "STEP 1 was a phase 3 semaglutide trial."
+    }
+  ],
+  "tirzepatide clinical trials": [
+    {
+      "title": "SURPASS-2",
+      "url": "https://offline.local/glp1/surpass-2",
+      "snippet": "SURPASS-2 evaluated tirzepatide."
+    }
+  ],
+  "liraglutide clinical trials": [
+    {
+      "title": "STEP 1",
+      "url": "https://offline.local/glp1/step-1",
+      "snippet": "GLP-1 receptor agonist trial."
+    }
+  ],
+  "GLP-1 obesity trials": [
+    {
+      "title": "STEP 1",
+      "url": "https://offline.local/glp1/step-1",
+      "snippet": "STEP 1 obesity trial."
+    }
+  ],
+  "GLP-1 diabetes trials": [
+    {
+      "title": "SURPASS-2",
+      "url": "https://offline.local/glp1/surpass-2",
+      "snippet": "SURPASS-2 diabetes trial."
+    }
+  ],
+  "STEP 1": [
+    {
+      "title": "STEP 1",
+      "url": "https://offline.local/glp1/step-1",
+      "snippet": "STEP 1 evaluated semaglutide."
+    }
+  ],
+  "SURPASS-2": [
+    {
+      "title": "SURPASS-2",
+      "url": "https://offline.local/glp1/surpass-2",
+      "snippet": "SURPASS-2 evaluated tirzepatide."
+    }
+  ]
+}

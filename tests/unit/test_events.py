@@ -9,6 +9,7 @@ Load-bearing invariants for the event bus:
 
 import asyncio
 import json
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -22,10 +23,13 @@ from researcher.events import (
     CycleStart,
     CycleStartPayload,
     EventBus,
+    EventSocketServer,
     FactWritten,
     FactWrittenPayload,
     RunComplete,
     RunCompletePayload,
+    SourcePackLoaded,
+    VerificationVote,
     parse_event,
 )
 
@@ -81,6 +85,37 @@ def test_parse_event_dispatches_by_type():
     e = parse_event(raw)
     assert isinstance(e, AgentLog)
     assert e.payload.msg == "hello"
+
+
+def test_competitor_gap_events_parse():
+    src = parse_event(
+        {
+            "type": "source_pack_loaded",
+            "seq": 1,
+            "ts": _ts().isoformat(),
+            "run_id": RUN_ID,
+            "payload": {"sources": 2, "chunks": 9},
+        }
+    )
+    vote = parse_event(
+        {
+            "type": "verification_vote",
+            "seq": 2,
+            "ts": _ts().isoformat(),
+            "run_id": RUN_ID,
+            "payload": {
+                "entity_id": "e1",
+                "field": "outcome",
+                "model": "m",
+                "vote": "uncertain",
+                "confidence": 0.4,
+                "disagreement": True,
+            },
+        }
+    )
+    assert isinstance(src, SourcePackLoaded)
+    assert isinstance(vote, VerificationVote)
+    assert vote.payload.disagreement is True
 
 
 # ---------- EventBus: JSONL fsync ----------
@@ -181,6 +216,40 @@ async def test_jsonl_is_authoritative_even_when_socket_overflows(tmp_path: Path)
     lines = (tmp_path / "events.jsonl").read_text().splitlines()
     assert len(lines) == 10
     assert bus.dropped_socket_events == 7
+
+
+@pytest.mark.asyncio
+async def test_event_socket_server_broadcasts_json_lines(tmp_path: Path):
+    short_dir = Path(tempfile.mkdtemp(prefix="rsock-", dir="/tmp"))
+    bus = EventBus(jsonl_path=tmp_path / "events.jsonl")
+    server = EventSocketServer(bus=bus, socket_path=short_dir / "events.sock")
+    await bus.start()
+    await server.start()
+    try:
+        reader, writer = await asyncio.open_unix_connection(
+            str(short_dir / "events.sock")
+        )
+        await bus.emit(
+            CycleStart(
+                seq=0,
+                ts=_ts(),
+                run_id=RUN_ID,
+                payload=CycleStartPayload(cycle=1, pending_tasks=3),
+            )
+        )
+        line = await asyncio.wait_for(reader.readline(), timeout=2.0)
+        data = json.loads(line.decode("utf-8"))
+        assert data["type"] == "cycle_start"
+        assert data["payload"]["pending_tasks"] == 3
+        writer.close()
+        await writer.wait_closed()
+    finally:
+        await server.stop()
+        await bus.stop()
+        try:
+            short_dir.rmdir()
+        except OSError:
+            pass
 
 
 @pytest.mark.asyncio

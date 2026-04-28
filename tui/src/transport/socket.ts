@@ -1,23 +1,6 @@
-/**
- * Unix socket transport placeholder.
- *
- * Wave 1-F ships only the JSONL replay transport. The live-attach
- * transport that consumes the Python side's bounded queue lives here
- * and will be fleshed out in Wave 2. For now we expose the same
- * AsyncGenerator<Event> contract so the App can be pointed at either
- * transport interchangeably.
- *
- * When we implement this for real, the shape will look like:
- *
- *   const socket = net.createConnection(socketPath);
- *   for await (const chunk of socket) {
- *     for (const line of framer.feed(chunk)) {
- *       yield parseEvent(JSON.parse(line));
- *     }
- *   }
- */
+import net from "node:net";
 
-import type { Event } from "./types.js";
+import { parseEvent, type Event } from "./types.js";
 
 export interface SocketTransportOptions {
   socketPath: string;
@@ -25,17 +8,72 @@ export interface SocketTransportOptions {
   signal?: AbortSignal;
 }
 
-/**
- * Placeholder reader: always throws when invoked. Callers should check
- * the CLI flags and prefer readJsonlEvents until Wave 2 lands.
- */
 export async function* readSocketEvents(
-  _opts: SocketTransportOptions,
+  opts: SocketTransportOptions,
 ): AsyncGenerator<Event, void, void> {
-  throw new Error(
-    "socket transport not implemented yet; use --replay <events.jsonl> for now",
-  );
-  // Unreachable, kept so TypeScript infers the generator type correctly.
-  // eslint-disable-next-line @typescript-eslint/no-unreachable
-  yield undefined as unknown as Event;
+  const socket = net.createConnection(opts.socketPath);
+  socket.setEncoding("utf8");
+  let buffer = "";
+  let ended = false;
+  let error: Error | null = null;
+  const pending: Event[] = [];
+  let notify: (() => void) | null = null;
+
+  const wake = (): void => {
+    if (notify) {
+      notify();
+      notify = null;
+    }
+  };
+
+  const abort = (): void => {
+    socket.destroy();
+    ended = true;
+    wake();
+  };
+
+  opts.signal?.addEventListener("abort", abort, { once: true });
+
+  socket.on("data", (chunk: string) => {
+    buffer += chunk;
+    for (;;) {
+      const idx = buffer.indexOf("\n");
+      if (idx === -1) break;
+      const line = buffer.slice(0, idx).trim();
+      buffer = buffer.slice(idx + 1);
+      if (!line) continue;
+      pending.push(parseEvent(JSON.parse(line)));
+    }
+    wake();
+  });
+  socket.on("end", () => {
+    ended = true;
+    wake();
+  });
+  socket.on("close", () => {
+    ended = true;
+    wake();
+  });
+  socket.on("error", (err) => {
+    error = err;
+    ended = true;
+    wake();
+  });
+
+  try {
+    while (!ended || pending.length > 0) {
+      while (pending.length > 0) {
+        const next = pending.shift();
+        if (next) yield next;
+      }
+      if (error) throw error;
+      if (ended) break;
+      await new Promise<void>((resolve) => {
+        notify = resolve;
+      });
+    }
+  } finally {
+    opts.signal?.removeEventListener("abort", abort);
+    socket.destroy();
+  }
 }

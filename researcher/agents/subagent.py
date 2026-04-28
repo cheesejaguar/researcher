@@ -26,6 +26,7 @@ from researcher.models import (
     Provenance,
     Task,
 )
+from researcher.skills.registry import SkillRegistry
 from researcher.storage.store import KnowledgeStore
 
 
@@ -48,6 +49,7 @@ class SubagentResearcher(Agent):
         goal: str,
         max_entities: int = 20,
         timeout_s: float = 120.0,
+        skill_registry: SkillRegistry | None = None,
     ) -> None:
         super().__init__(agent_id=agent_id, llm=llm, store=store, emit=emit, run_id=run_id)
         self._runner = runner
@@ -57,6 +59,7 @@ class SubagentResearcher(Agent):
         self._goal = goal
         self._max_entities = max_entities
         self._timeout_s = timeout_s
+        self._skill_registry = skill_registry
 
     async def run(self, task: Task) -> AgentResult:
         await self.set_state(AgentState.PLANNING)
@@ -116,12 +119,11 @@ class SubagentResearcher(Agent):
 
         # Happy path: map extractions -> FactClaims.
         response = result.data
-        if not response.extractions:
-            await self._log_info(
-                f"subagent returned 0 extractions for entity={response.entity_name!r} (empty response)"
-            )
-
         claims = self._build_claims(task, response)
+        if not claims:
+            await self._log_info(
+                f"subagent returned 0 extractions across {len(response.entities)} entities (empty response)"
+            )
         usage = result.raw_usage or {}
         tokens_in = int(usage.get("input_tokens", 0) or 0)
         tokens_out = int(usage.get("output_tokens", 0) or 0)
@@ -152,15 +154,24 @@ class SubagentResearcher(Agent):
         if task.field_hints:
             field_names = task.field_hints
         task_description = task.seed_query or "Find all entities matching the goal."
+        entity_type = self._entity_schema.get("entity_type", "Entity")
+        skill_fragments: list[str] = []
+        if self._skill_registry is not None:
+            skill_fragments = [
+                card.prompt_fragment
+                for card in self._skill_registry.cards_for_entity_type(entity_type)
+                if card.prompt_fragment
+            ]
         user_prompt = build_user_prompt(
             goal=self._goal,
-            entity_type=self._entity_schema.get("entity_type", "Entity"),
+            entity_type=entity_type,
             task_description=task_description,
             field_list=field_names,
             max_entities=self._max_entities,
             schema_json=json.dumps(
                 SubagentResponse.model_json_schema(), separators=(",", ":")
             ),
+            skill_fragments=skill_fragments,
         )
         return f"{SYSTEM_PROMPT}\n\n{user_prompt}"
 
@@ -169,29 +180,35 @@ class SubagentResearcher(Agent):
         entity_type = self._entity_schema.get("entity_type", "Entity")
         extractor_model = f"{self._cli_kind.value}/unknown"
         claims: list[FactClaim] = []
-        for i, ex in enumerate(response.extractions):
-            prov = Provenance(
-                url=ex.source_url,
-                fetched_at=now,
-                snippet=ex.snippet,
-                extractor_model=extractor_model,
-                agent_id=self.agent_id,
-                task_id=task.id,
-                span_id=f"cli_{i}",
-            )
-            claims.append(
-                FactClaim(
-                    claim_id=uuid4().hex,
-                    entity_type=entity_type,
-                    entity_name=response.entity_name,
-                    field=ex.field,
-                    value=ex.value,
-                    confidence=ex.confidence,
-                    provenance=prov,
-                    emitted_by=self.agent_id,
+        claim_idx = 0
+        for entity in response.entities:
+            entity_name = entity.entity_name.strip()
+            if not entity_name:
+                continue
+            for ex in entity.extractions:
+                prov = Provenance(
+                    url=ex.source_url,
+                    fetched_at=now,
+                    snippet=ex.snippet,
+                    extractor_model=extractor_model,
+                    agent_id=self.agent_id,
                     task_id=task.id,
+                    span_id=f"cli_{claim_idx}",
                 )
-            )
+                claims.append(
+                    FactClaim(
+                        claim_id=uuid4().hex,
+                        entity_type=entity_type,
+                        entity_name=entity_name,
+                        field=ex.field,
+                        value=ex.value,
+                        confidence=ex.confidence,
+                        provenance=prov,
+                        emitted_by=self.agent_id,
+                        task_id=task.id,
+                    )
+                )
+                claim_idx += 1
         return claims
 
     async def _log_info(self, msg: str) -> None:

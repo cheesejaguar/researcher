@@ -281,6 +281,44 @@ class DuckDBKnowledgeStore(KnowledgeStore):
             )
             """
         )
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sources (
+                source_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                url TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                path TEXT,
+                metadata_json TEXT NOT NULL,
+                ingested_at TIMESTAMP NOT NULL
+            )
+            """
+        )
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS source_chunks (
+                chunk_id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                text TEXT NOT NULL
+            )
+            """
+        )
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS verification_votes (
+                vote_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                entity_id TEXT,
+                field_name TEXT NOT NULL,
+                model TEXT NOT NULL,
+                vote_json TEXT NOT NULL,
+                confidence DOUBLE NOT NULL,
+                rationale TEXT,
+                created_at TIMESTAMP NOT NULL
+            )
+            """
+        )
         # Declare (or refresh) the DuckPGQ property graph view so ``MATCH``
         # clauses can traverse (entities)-[entity_relations]->(entities).
         # Only attempted when the extension loaded; swallowed on failure so
@@ -815,6 +853,64 @@ class DuckDBKnowledgeStore(KnowledgeStore):
             conn.execute(
                 "INSERT INTO provenance VALUES (?, ?)",
                 [provenance_id, json.dumps(data)],
+            )
+
+    async def record_sources(self, sources: list[dict], chunks: list[dict]) -> None:
+        async with self._lock:
+            conn = self._require_conn()
+            now = _now()
+            for src in sources:
+                conn.execute(
+                    "DELETE FROM sources WHERE source_id = ?",
+                    [src["source_id"]],
+                )
+                conn.execute(
+                    "INSERT INTO sources VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        src["source_id"],
+                        src.get("title", ""),
+                        src.get("url", ""),
+                        src.get("source_type", "unknown"),
+                        src.get("path", ""),
+                        json.dumps(src.get("metadata", {})),
+                        now,
+                    ],
+                )
+            for chunk in chunks:
+                conn.execute(
+                    "DELETE FROM source_chunks WHERE chunk_id = ?",
+                    [chunk["chunk_id"]],
+                )
+                conn.execute(
+                    "INSERT INTO source_chunks VALUES (?, ?, ?, ?)",
+                    [
+                        chunk["chunk_id"],
+                        chunk["source_id"],
+                        int(chunk.get("ordinal", 0)),
+                        chunk.get("text", ""),
+                    ],
+                )
+
+    async def record_verification_vote(self, vote: dict) -> None:
+        async with self._lock:
+            conn = self._require_conn()
+            conn.execute(
+                "DELETE FROM verification_votes WHERE vote_id = ?",
+                [vote["vote_id"]],
+            )
+            conn.execute(
+                "INSERT INTO verification_votes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    vote["vote_id"],
+                    vote.get("run_id", ""),
+                    vote.get("entity_id"),
+                    vote.get("field_name", ""),
+                    vote.get("model", ""),
+                    json.dumps(vote.get("vote", None)),
+                    float(vote.get("confidence", 0.0)),
+                    vote.get("rationale", ""),
+                    _now(),
+                ],
             )
 
     # ---- conflicts -------------------------------------------------------
