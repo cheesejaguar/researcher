@@ -1,5 +1,13 @@
 # Obsidian Integration Implementation Plan
 
+> Current status, 2026-04-28: this is a historical implementation plan. The
+> Obsidian sink has shipped, the primary store is DuckDB, and current
+> command/artifact details live in
+> [2026-04-28-current-product-surface.md](2026-04-28-current-product-surface.md).
+> Use `uv run python -m researcher ...` for development commands.
+> Later task snippets intentionally preserve the original Wave 1 plan context;
+> use the current-product-surface doc for exact commands and status.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add an optional `ObsidianWriter` that materializes `FactClaim`s into Markdown files in a user-configured Obsidian vault, live during a run, without disturbing the primary `KnowledgeStore` path.

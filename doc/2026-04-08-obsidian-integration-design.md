@@ -1,13 +1,21 @@
 # Obsidian Integration — Design
 
-**Status:** draft for review
+**Status:** historical design note; implementation has shipped.
 **Date:** 2026-04-08
 **Author:** Aaron (+ Claude)
 **Follows:** Wave 1-E orchestrator wiring (`c6a7a8a`)
 
+> Current status, 2026-04-28: the Obsidian writer is implemented as an optional
+> secondary sink. The primary store is now DuckDB, run summaries are persisted,
+> and current command/artifact details live in
+> [2026-04-28-current-product-surface.md](2026-04-28-current-product-surface.md).
+> Use `uv run python -m researcher ...` for development commands.
+> Some lower sections intentionally preserve the original Wave 1 framing for
+> rationale; use the current-product-surface doc for exact commands and status.
+
 ## Context
 
-`researcher` produces typed entities with provenance-tracked facts during a run. Today those facts live in a `KnowledgeStore` (currently `StubKnowledgeStore`, Wave 1-B will ship the real DuckDB backend). Users who already run Obsidian for personal knowledge management want those entities to show up as browsable Markdown notes in their vault so they can use backlinks, the graph view, Dataview queries, tags, and all the other PKM affordances Obsidian provides.
+`researcher` produces typed entities with provenance-tracked facts during a run. Today those facts live in the DuckDB-backed `KnowledgeStore`. Users who already run Obsidian for personal knowledge management want those entities to show up as browsable Markdown notes in their vault so they can use backlinks, the graph view, Dataview queries, tags, and all the other PKM affordances Obsidian provides.
 
 This doc specifies an additive, optional Obsidian integration that materializes `FactClaim`s into Markdown files as they're produced during a run, without disturbing the primary `KnowledgeStore` path.
 
@@ -365,13 +373,13 @@ Full `Orchestrator.run()` with a real `ObsidianWriter` pointed at `tmp_path`, `S
 
 ```bash
 # Via spec YAML (obsidian_vault: ~/Documents/ObsidianVault):
-uv run researcher run specs/wars.yaml
+uv run python -m researcher run specs/wars.yaml
 
 # Via CLI flag (overrides spec):
-uv run researcher run specs/wars.yaml --obsidian-vault ~/Documents/ObsidianVault
+uv run python -m researcher run specs/wars.yaml --obsidian-vault ~/Documents/ObsidianVault
 
 # Disable despite spec:
-uv run researcher run specs/wars.yaml --obsidian-vault ""
+uv run python -m researcher run specs/wars.yaml --obsidian-vault ""
 ```
 
 Precedence: CLI flag > spec field > None.
@@ -383,7 +391,7 @@ Path resolution: `Path(value).expanduser().resolve()`. Validation happens in `Ob
 ## Scope cuts
 
 - **Reading existing files.** The writer never opens existing `.md` files. It can't recover a user's prior-run fields, custom sections, or hand edits. Documented as intentional.
-- **Cross-run accumulation of facts in a single note.** The vault file reflects one run's view. True accumulation lives in the typed store (DuckDB, Wave 1-B) — a future feature could snapshot the store's accumulated view into the vault at run end.
+- **Cross-run accumulation of facts in a single note.** The vault file reflects one run's view. True accumulation lives in the typed DuckDB store; export/report commands can render completed-run views after the run.
 - **Backlink generation between entities.** `[[Wikilink]]` auto-generation (e.g., linking "WWII" to the "Allies" entity note) is deferred. Obsidian can do fuzzy linking itself via the "unlinked mentions" feature.
 - **Obsidian-specific features** — callouts, footnotes, embedded queries, Dataview inline fields. The rendered body uses plain Markdown + tables. Users who want these can post-process the vault.
 - **Attachment handling.** If a source has an image, we don't download or embed it. Only text snippets land in the vault.
@@ -400,7 +408,7 @@ Path resolution: `Path(value).expanduser().resolve()`. Validation happens in `Ob
 ## Success criteria
 
 1. `uv run pytest -q` passes with 29 new tests green.
-2. Running `uv run researcher run specs/wars.yaml --obsidian-vault /tmp/vault` (with `claude` on PATH) populates `/tmp/vault/researcher/War/` with `.md` files that open cleanly in Obsidian.
+2. Running `uv run python -m researcher run specs/wars.yaml --obsidian-vault /tmp/vault` (with `claude` on PATH) populates `/tmp/vault/researcher/War/` with `.md` files that open cleanly in Obsidian.
 3. Each file has valid YAML frontmatter, a Fields table, a Provenance section, and a "Seen in Runs" section.
 4. Re-running the same spec twice produces the same filenames (merged location), with the second run's content replacing the first.
 5. Running without `--obsidian-vault` produces byte-identical behavior to pre-integration runs (baseline test suite still green).

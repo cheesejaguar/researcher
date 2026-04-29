@@ -8,7 +8,7 @@
 [![Ink](https://img.shields.io/badge/tui-ink%205-blueviolet?logo=react&logoColor=white)](https://github.com/vadimdemedes/ink)
 [![DuckDB](https://img.shields.io/badge/store-duckdb-FFF000?logo=duckdb&logoColor=black)](https://duckdb.org)
 [![Pydantic](https://img.shields.io/badge/pydantic-v2-E92063?logo=pydantic&logoColor=white)](https://docs.pydantic.dev)
-[![Tests](https://img.shields.io/badge/tests-303%20passing-brightgreen.svg)](#-status)
+[![Tests](https://img.shields.io/badge/tests-533%20passing-brightgreen.svg)](#-status)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Code style: ruff](https://img.shields.io/badge/lint-ruff-D7FF64?logo=ruff&logoColor=black)](https://github.com/astral-sh/ruff)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/cheesejaguar/researcher/pulls)
@@ -53,8 +53,16 @@ A third, smaller bet: 💸 **cost discipline**. The whole thing is designed to o
 ### 📡 Observability
 - 🧾 **JSONL event bus** — every orchestrator, agent, writer, and subagent event is fsync'd to `runs/<run_id>/events.jsonl` for full replay
 - 🔌 **Best-effort socket queue** for live TUI attach (bounded, drops oldest, never blocks the core)
-- 🌈 **Ink TUI** with four panels (Plan, Agent DAG, Knowledge, Status bar) and `--replay <events.jsonl>` mode for post-hoc investigation
+- 🌈 **Ink TUI** with four panels (Plan, Agent DAG, Knowledge, Status bar), live socket attach, replay-then-tail, coverage hints, source-pack status, and council disagreement counts
 - 📊 **Stats everywhere**: writer queue metrics, cost tracker by task id, Obsidian write counter, CLI runner cache hits
+
+### 📚 Source packs, evidence, and reports
+- 📦 **Source packs**: local files/directories, URL lists, and crawl-domain seeds are normalized into DuckDB `sources` and `source_chunks`
+- 🧭 **Source policy**: `allow_domains`, `deny_domains`, `trusted_domains`, and `require_trusted` guide search/fetch and confidence scoring
+- 🔎 **Source-first native agents**: native discovery/expansion searches local source chunks before falling back to web search
+- 🧾 **Evidence matrix**: one row per entity-field with value, confidence, source URL, supporting snippet, provenance id, conflict status, and last-seen run
+- 📝 **Cited reports**: Markdown, HTML, or JSON reports with numeric citations, source appendix, conflicts, coverage gaps, acceptance metrics, and next seed suggestions
+- 🗳️ **Optional council verification**: conflicted or low-confidence fields can be checked by configured model tiers, with votes persisted and surfaced in the TUI
 
 ### 📘 Obsidian integration
 - 🏠 **Write-through sink** that materializes `FactClaim`s into Markdown files in a user-provided Obsidian vault
@@ -267,6 +275,8 @@ researcher/
 │   ├── spec.py                     # RunSpec loader + entity class builder
 │   ├── models.py                   # Task / FactClaim / Provenance / AgentResult
 │   ├── events.py                   # discriminated Event union + EventBus
+│   ├── sources.py                  # source pack ingestion + source-policy wrappers
+│   ├── reporting.py                # evidence matrices + cited reports
 │   ├── agents/                     # 5 native agents + SubagentResearcher
 │   ├── backends/                   # CLI subagent path (claude / codex)
 │   ├── llm/                        # OpenRouterClient + cache + prompts + embedder
@@ -294,8 +304,9 @@ researcher/
 │   ├── 2026-04-08-cli-subagent-backend-design.md
 │   ├── 2026-04-08-cli-subagent-backend-plan.md
 │   ├── 2026-04-08-obsidian-integration-design.md
-│   └── 2026-04-08-obsidian-integration-plan.md
-└── 🧪 tests/                        # 291 Python tests + 12 TUI tests
+│   ├── 2026-04-08-obsidian-integration-plan.md
+│   └── 2026-04-28-current-product-surface.md
+└── 🧪 tests/                        # 533 Python tests + 17 TUI tests as of 2026-04-28
     ├── unit/
     ├── integration/
     └── stubs/                      # deterministic test doubles
@@ -400,7 +411,8 @@ uv run pytest tests/unit -q                   # unit only
 uv run pytest tests/unit/test_obsidian_writer.py -v   # single file
 
 # TUI tests (vitest)
-cd tui && npm test
+cd tui && npm test -- --run
+cd tui && npm run build
 ```
 
 ### Linting
@@ -427,7 +439,7 @@ RESEARCHER_RUN_MANUAL=1 uv run pytest tests/manual/ -v
 
 ## 📊 Status
 
-**v0.1** — core complete, Wave 2 integration tuning pending.
+**v0.1** — core product surface implemented; live acceptance tuning pending.
 
 ### What works today ✅
 
@@ -441,9 +453,9 @@ RESEARCHER_RUN_MANUAL=1 uv run pytest tests/manual/ -v
 - ✅ Obsidian write-through integration
 - ✅ Ink TUI with live socket attach, replay, coverage hints, and acceptance progress
 - ✅ `doctor`, `inspect`, `accept`, `export`, `evidence`, `report`, `stop`, and `resume` CLI surfaces
-- ✅ Source packs, source policy, run history, and wide/batch item mode
+- ✅ Source packs, source policy, citation evidence, cited reports, run history, optional council verification, and wide/batch item mode
 - ✅ Fetch / search / extract stack (httpx / Tavily / Brave / Serper / trafilatura)
-- ✅ Python and TypeScript test suites, ruff clean
+- ✅ Python and TypeScript test suites, ruff clean (`533 passed, 1 skipped`; TUI `17 passed` as of 2026-04-28)
 - ✅ 2 example specs: `wars.yaml`, `glp1_trials.yaml`
 
 ### Wave 2 next up 🚧
@@ -485,6 +497,7 @@ MIT © 2026 — see [LICENSE](LICENSE)
 ## 🧭 Documentation
 
 - 📘 **[Design docs](doc/)** — design documents and implementation plans
+- 🧭 **[Current product surface](doc/2026-04-28-current-product-surface.md)** — current commands, spec fields, artifacts, and verification gates
 - 🗺️ **Main v1 plan** — `~/.claude/plans/distributed-mapping-rossum.md`
 - 🎯 **Example specs** — [specs/](specs/)
 - 🎓 **Hand-authored skills** — [skills/](skills/)
