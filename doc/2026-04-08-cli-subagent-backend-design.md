@@ -1,9 +1,19 @@
 # CLI Subagent Backend — Design
 
-**Status:** draft for review
+**Status:** historical design note; implementation has shipped.
 **Date:** 2026-04-08
 **Author:** Aaron (+ Claude)
 **Follows:** Wave 0 contracts commit `a0d3ed6`
+
+> Current status, 2026-04-28: the CLI backend is implemented alongside the
+> native API path. The current development command is
+> `uv run python -m researcher`. `SubagentResponse` now supports multiple
+> entities via `entities: list[SubagentEntity]` while still parsing legacy
+> single-entity cached fixtures. `_spawn_agent` emits `agent_spawn`, CLI calls
+> use the separate subagent cap, and current command/artifact details live in
+> [2026-04-28-current-product-surface.md](2026-04-28-current-product-surface.md).
+> Some lower sections intentionally preserve the original Wave 0 framing for
+> rationale; use the current-product-surface doc for exact commands and status.
 
 ## Context
 
@@ -113,18 +123,20 @@ The reduce step is indistinguishable by origin.
   quoting issues. Each runner holds an in-memory per-run response cache keyed
   on `sha256(prompt_body + argv_tuple + schema_json)`.
 - `researcher/backends/models.py` — Pydantic models: `CliKind` enum
-  (`CLAUDE_CODE`, `CODEX`), `SubagentResponse` (the JSON shape the CLI is
-  required to return: `entity_name`, `extractions: list[Extraction]`,
-  `diagnostics: str`), `Extraction` (`field`, `value`, `source_url`, `snippet`,
-  `confidence`), `CliResult` (`ok: bool`, `data: Optional[SubagentResponse]`,
-  `error: Optional[str]`, `wall_ms: int`, `exit_code: Optional[int]`,
-  `raw_usage: Optional[dict]`), `BackendChoice` (`kind: Optional[CliKind]`,
-  `reason: str`).
+  (`CLAUDE_CODE`, `CODEX`), `SubagentEntity` (`entity_name`,
+  `extractions: list[Extraction]`), `SubagentResponse` (the current JSON shape:
+  `entities: list[SubagentEntity]`, plus backward-compatible parsing for the
+  legacy single-entity shape), `Extraction` (`field`, `value`, `source_url`,
+  `snippet`, `confidence`), `CliResult` (`ok: bool`,
+  `data: Optional[SubagentResponse]`, `error: Optional[str]`, `wall_ms: int`,
+  `exit_code: Optional[int]`, `raw_usage: Optional[dict]`), `BackendChoice`
+  (`kind: Optional[CliKind]`, `reason: str`).
 - `researcher/agents/subagent.py` — `SubagentResearcher(Agent)`. Constructor
   takes `runner: CliRunner`, `entity_schema: dict`, `budget: Budget`. Its
   `run(task)` builds the prompt, checks `budget.allows_subagent_call()`,
-  dispatches to the runner, maps `SubagentResponse.extractions` to
-  `FactClaim`s, emits `subagent_call` event, returns `AgentResult(cost_usd=0)`.
+  dispatches to the runner, maps every `SubagentResponse.entities[*]`
+  extraction to `FactClaim`s, emits `subagent_call` event, returns
+  `AgentResult(cost_usd=0)`.
 - `tests/stubs/cli_runner.py` — `StubCliRunner` backed by a fixture dict.
   `calls: list[dict]` records every invocation for assertions. Real subprocess
   execution is never exercised in unit or offline integration tests.
@@ -194,9 +206,10 @@ braces second check on stdout.
    then parses `result` into a `SubagentResponse`.
 6. **Emit `subagent_call` event.** Orchestrator calls
    `budget.record_subagent_call()`.
-7. **Map to FactClaims.** Agent converts each `Extraction` into a `FactClaim`
-   with `Provenance.url=ex.source_url`, `extractor_model="claude-code/sonnet"`,
-   `span_id=f"cli_{i}"`. Returns `AgentResult(claims=..., cost_usd=0.0)`.
+7. **Map to FactClaims.** Agent converts each extraction for each returned
+   entity into a `FactClaim` with `Provenance.url=ex.source_url`,
+   `extractor_model="claude-code/sonnet"`, `span_id=f"cli_{i}"`. Returns
+   `AgentResult(claims=..., cost_usd=0.0)`.
 8. **Reduce.** Claims flow into the existing `FactWriter` serial drain loop.
    Indistinguishable from native-agent claims downstream.
 9. **Cycle end + stop checks.** Standard Wave 0 path. New stop: `SUBAGENT_CAP`
@@ -348,7 +361,7 @@ Each step RED → GREEN → REFACTOR before the next.
    the new tests added.
 2. `uv run pytest tests/integration/test_smoke_subagent_wars.py` passes with
    `RESEARCHER_OFFLINE=1`.
-3. Running `uv run researcher run specs/wars.yaml` on a laptop with
+3. Running `uv run python -m researcher run specs/wars.yaml` on a laptop with
    `claude` installed + authenticated spawns at least one real `subagent_call`
    event (verified by tailing `runs/<id>/events.jsonl`), produces ≥ 5 entities
    from fixture-free live data, and reports `run_summary.cost_usd == 0.0`.

@@ -1,5 +1,13 @@
 # CLI Subagent Backend — Implementation Plan
 
+> Current status, 2026-04-28: this is a historical implementation plan. The CLI
+> backend has shipped, the native API path is wired, the public command surface
+> has expanded, and current behavior is summarized in
+> [2026-04-28-current-product-surface.md](2026-04-28-current-product-surface.md).
+> Use `uv run python -m researcher ...` for development commands.
+> Later task snippets intentionally preserve the original Wave 0 plan context;
+> use the current-product-surface doc for exact commands and status.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a whole-task delegation path so research tasks can be offloaded to local `claude -p` or `codex exec` subprocesses with WebSearch+WebFetch enabled, saving both LLM and search credits for users on flat-fee subscriptions. The native API path remains the fallback.
@@ -2540,7 +2548,7 @@ def run(
 - [ ] **Step 6: Smoke-test the CLI flag**
 
 ```bash
-uv run researcher run --help 2>&1 | grep -A1 -- "--backend"
+uv run python -m researcher run --help 2>&1 | grep -A1 -- "--backend"
 ```
 
 Expected output includes `--backend [auto|cli|api]` or similar help text.
@@ -3012,8 +3020,8 @@ Expected: every test green. Record the count (e.g., `86 passed`).
 - [ ] **Step 2: Confirm the CLI still works end-to-end**
 
 ```bash
-uv run researcher version
-uv run researcher run --help
+uv run python -m researcher version
+uv run python -m researcher run --help
 ```
 
 Expected: version prints `0.1.0`; `--backend` appears in the run subcommand help.
