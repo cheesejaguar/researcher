@@ -116,7 +116,7 @@ async def test_codex_runner_persists_successful_result_to_disk(tmp_path: Path):
         return _fake_process()
 
     runner1 = CodexRunner(
-        model="o4-mini",
+        model="gpt-6-sol",
         last_message_file=last_message_file,
         schema_file_dir=tmp_path,
         cache_dir=cache_dir,
@@ -128,7 +128,7 @@ async def test_codex_runner_persists_successful_result_to_disk(tmp_path: Path):
     assert (cache_dir / "codex_cache.json").exists()
 
     runner2 = CodexRunner(
-        model="o4-mini",
+        model="gpt-6-sol",
         last_message_file=last_message_file,
         schema_file_dir=tmp_path,
         cache_dir=cache_dir,

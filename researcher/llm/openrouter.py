@@ -47,7 +47,28 @@ _PRICING: dict[str, tuple[float, float]] = {
     "anthropic/claude-sonnet-4.6": (3.00, 15.00),
     "anthropic/claude-opus-4.6": (5.00, 25.00),
     "anthropic/claude-opus-4.6-fast": (30.00, 150.00),
+    # Claude 5.5 (OpenRouter /v1/models, Oct 2026). Haiku 5.5 is $0.10/$0.50
+    # below 100K input tokens.
+    "anthropic/claude-haiku-5.5": (0.10, 0.50),
 }
+
+# Models that reject sampling params (temperature/top_p) with a 400:
+# Claude 4.7+/5.x and OpenAI GPT-5+/o-series reasoning models.
+_NO_SAMPLING_PREFIXES: tuple[str, ...] = (
+    "anthropic/claude-haiku-5",
+    "anthropic/claude-sonnet-5",
+    "anthropic/claude-opus-5",
+    "anthropic/claude-opus-4.7",
+    "anthropic/claude-opus-4.8",
+    "anthropic/claude-fable",
+    "openai/gpt-5",
+    "openai/gpt-6",
+    "openai/o",
+)
+
+
+def _accepts_temperature(model: str) -> bool:
+    return not model.startswith(_NO_SAMPLING_PREFIXES)
 
 
 def _estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
@@ -192,8 +213,9 @@ class OpenRouterClient(LLMClient):
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": cached_messages,
-            "temperature": temperature,
         }
+        if _accepts_temperature(model):
+            kwargs["temperature"] = temperature
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
         raw = await asyncio.wait_for(

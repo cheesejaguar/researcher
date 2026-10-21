@@ -319,7 +319,7 @@ class CodexRunner:
 
     def __init__(
         self,
-        model: str = "o4-mini",
+        model: str = "gpt-6-sol",
         last_message_file: Optional[Path] = None,
         schema_file_dir: Optional[Path] = None,
         post_mortem_dir: Optional[Path] = None,

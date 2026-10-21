@@ -354,3 +354,21 @@ async def test_complete_cache_read_input_tokens_defaults_to_zero():
         task_id="t1",
     )
     assert out.usage.cache_read_input_tokens == 0
+
+
+def test_pricing_includes_haiku_5_5_and_is_cheaper_than_haiku_4_5():
+    from researcher.llm.openrouter import _PRICING, _estimate_cost
+
+    assert "anthropic/claude-haiku-5.5" in _PRICING
+    assert _estimate_cost("anthropic/claude-haiku-5.5", 1000, 500) < _estimate_cost(
+        "anthropic/claude-haiku-4.5", 1000, 500
+    )
+
+
+def test_temperature_omitted_for_reasoning_models():
+    from researcher.llm.openrouter import _accepts_temperature
+
+    assert not _accepts_temperature("anthropic/claude-haiku-5.5")
+    assert not _accepts_temperature("openai/gpt-6-sol")
+    assert _accepts_temperature("anthropic/claude-sonnet-4.6")
+    assert _accepts_temperature("openrouter/hermes-3-8b")

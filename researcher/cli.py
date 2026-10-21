@@ -788,7 +788,7 @@ async def _execute_run(
             else:
                 llm = OpenRouterClient(
                     model_map={
-                        LLMTier.FAST: spec_obj.models.get("fast", "anthropic/claude-haiku-4.5"),
+                        LLMTier.FAST: spec_obj.models.get("fast", "anthropic/claude-haiku-5.5"),
                         LLMTier.SMART: spec_obj.models.get("smart", "anthropic/claude-sonnet-4.6"),
                         LLMTier.HEAVY: spec_obj.models.get("heavy", "anthropic/claude-opus-4.6"),
                     },
@@ -822,7 +822,7 @@ async def _execute_run(
                     )
                 if kind == CliKind.CODEX:
                     return CodexRunner(
-                        model="o4-mini",
+                        model="gpt-6-sol",
                         cache_dir=cache_dir,
                         post_mortem_dir=post_mortem_dir,
                     )
