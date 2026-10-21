@@ -39,7 +39,7 @@ async def test_argv_construction_includes_required_flags(tmp_path: Path):
         return _fake_process()
 
     runner = CodexRunner(
-        model="o4-mini",
+        model="gpt-6-sol",
         last_message_file=last_message_file,
         schema_file_dir=tmp_path,
     )
@@ -56,7 +56,7 @@ async def test_argv_construction_includes_required_flags(tmp_path: Path):
     assert "read-only" in captured_argv
     assert "--skip-git-repo-check" in captured_argv
     assert "-m" in captured_argv
-    assert "o4-mini" in captured_argv
+    assert "gpt-6-sol" in captured_argv
 
 
 @pytest.mark.asyncio
@@ -76,7 +76,7 @@ async def test_schema_file_is_written_and_cleaned_up(tmp_path: Path):
         return _fake_process()
 
     runner = CodexRunner(
-        model="o4-mini",
+        model="gpt-6-sol",
         last_message_file=last_message_file,
         schema_file_dir=tmp_path,
     )
@@ -113,7 +113,7 @@ async def test_parses_last_message_file_into_subagent_response(tmp_path: Path):
         return _fake_process()
 
     runner = CodexRunner(
-        model="o4-mini",
+        model="gpt-6-sol",
         last_message_file=last_message_file,
         schema_file_dir=tmp_path,
     )
@@ -134,7 +134,7 @@ async def test_non_zero_exit_captures_stderr_tail(tmp_path: Path):
         return _fake_process(stderr=b"Error: config unreadable\n", returncode=3)
 
     runner = CodexRunner(
-        model="o4-mini",
+        model="gpt-6-sol",
         last_message_file=last_message_file,
         schema_file_dir=tmp_path,
     )
@@ -153,7 +153,7 @@ async def test_usage_limit_pattern_match(tmp_path: Path):
         return _fake_process(stderr=b"quota exceeded for the month\n", returncode=1)
 
     runner = CodexRunner(
-        model="o4-mini",
+        model="gpt-6-sol",
         last_message_file=last_message_file,
         schema_file_dir=tmp_path,
     )
