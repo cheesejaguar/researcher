@@ -389,12 +389,8 @@ async def test_orchestrator_emits_coverage_report_after_cycle_end():
 
     await orch.run()
 
-    cycle_ends = [
-        i for i, e in enumerate(bus.events) if isinstance(e, CycleEnd)
-    ]
-    coverage = [
-        i for i, e in enumerate(bus.events) if isinstance(e, CoverageReport)
-    ]
+    cycle_ends = [i for i, e in enumerate(bus.events) if isinstance(e, CycleEnd)]
+    coverage = [i for i, e in enumerate(bus.events) if isinstance(e, CoverageReport)]
     assert len(cycle_ends) >= 1
     assert len(coverage) >= 1
     # CoverageReport must come AFTER its corresponding CycleEnd.

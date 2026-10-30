@@ -31,7 +31,7 @@ from researcher.models import (
 from researcher.sources import source_authority
 from researcher.storage.store import KnowledgeStore
 
-_TYPE_MAP: dict[str, type] = {
+_TYPE_MAP: dict[str, Any] = {
     "str": str,
     "int": int,
     "float": float,
@@ -39,11 +39,11 @@ _TYPE_MAP: dict[str, type] = {
 }
 
 
-def _resolve_field_type(type_str: str) -> type:
+def _resolve_field_type(type_str: str) -> Any:
     type_str = type_str.strip()
     if type_str.startswith("list[") and type_str.endswith("]"):
         inner = type_str[5:-1].strip()
-        return list[_TYPE_MAP.get(inner, str)]  # type: ignore[valid-type]
+        return list[_TYPE_MAP.get(inner, str)]  # type: ignore[misc]
     return _TYPE_MAP.get(type_str, str)
 
 
@@ -66,6 +66,7 @@ def _build_response_model(
         if not name:
             continue
         enum_values = f.get("enum") or []
+        py_type: Any
         if enum_values:
             literal_type = Literal[tuple(enum_values)]  # type: ignore[valid-type]
             if f.get("type", "str").strip() == "list[str]":
@@ -77,6 +78,12 @@ def _build_response_model(
         fields[name] = (Optional[py_type], Field(default=None))
     if not fields:
         fields["_placeholder"] = (Optional[str], Field(default=None))
+    # Per-field source attribution. The claim loop treats this reserved
+    # name as metadata rather than an entity field.
+    fields["field_sources"] = (
+        dict[str, str],
+        Field(default_factory=dict),
+    )
     return create_model(f"{entity_type}ExpandResponse", **fields)  # type: ignore[call-overload]
 
 
@@ -182,9 +189,7 @@ class ExpandAgent(Agent):
                 if c.prompt_fragment.strip()
             ]
             if fragments:
-                skill_text = "\n\nDomain guidance:\n" + "\n".join(
-                    f"- {f}" for f in fragments
-                )
+                skill_text = "\n\nDomain guidance:\n" + "\n".join(f"- {f}" for f in fragments)
 
         messages = [
             {
@@ -202,6 +207,9 @@ class ExpandAgent(Agent):
                     f"Entity: {entity_name} ({entity_type})\n"
                     f"Fields to fill: {', '.join(allowed_fields) if allowed_fields else 'all'}"
                     f"{skill_text}\n\n"
+                    "For every populated field, add an entry to "
+                    "`field_sources` mapping the field name to the exact "
+                    "SOURCE URL that supports the value.\n\n"
                     f"Sources:\n{context}"
                 ),
             },
@@ -227,13 +235,12 @@ class ExpandAgent(Agent):
 
         claims: list[FactClaim] = []
         now = datetime.now(UTC)
-        primary_url = fetched[0][0] if fetched else "native://no-source"
-        primary_snippet = fetched[0][1][:500] if fetched else ""
-        confidence = 0.8
-        if self._deps.source_policy is not None:
-            confidence = min(0.95, 0.6 + 0.3 * source_authority(primary_url, self._deps.source_policy))
+        default_url = fetched[0][0] if fetched else "native://no-source"
+        default_snippet = fetched[0][1][:500] if fetched else ""
+        source_bodies = {url: body for url, body in fetched}
 
         payload = response.model_dump() if isinstance(response, BaseModel) else dict(response)
+        field_sources = payload.pop("field_sources", {}) or {}
 
         # Optional skill-card-driven field validation. A field is rejected only
         # if at least one matching skill card declares it in `output_schema` and
@@ -244,7 +251,7 @@ class ExpandAgent(Agent):
             skill_cards = self._deps.skill_registry.cards_for_entity_type(entity_type)
 
         for field_name, value in payload.items():
-            if field_name == "_placeholder":
+            if field_name in {"_placeholder", "field_sources"}:
                 continue
             if value is None:
                 continue
@@ -267,10 +274,20 @@ class ExpandAgent(Agent):
                         f"skill schema rejected field {field_name}={value!r}: {rejected_reason}",
                     )
                     continue
+            source_url = field_sources.get(field_name, default_url)
+            if source_url not in source_bodies:
+                source_url = default_url
+            snippet = source_bodies.get(source_url, default_snippet)[:500]
+            confidence = 0.8
+            if self._deps.source_policy is not None:
+                confidence = min(
+                    0.95,
+                    0.6 + 0.3 * source_authority(source_url, self._deps.source_policy),
+                )
             prov = Provenance(
-                url=primary_url,
+                url=source_url,
                 fetched_at=now,
-                snippet=primary_snippet,
+                snippet=snippet,
                 extractor_model="native/expand",
                 agent_id=self.agent_id,
                 task_id=task.id,

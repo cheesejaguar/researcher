@@ -12,12 +12,20 @@ configured.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI styles so assertions work when CI forces color output."""
+    return _ANSI_RE.sub("", text)
 
 
 @pytest.fixture
@@ -91,9 +99,10 @@ def test_run_help_shows_all_flags(cli_runner: CliRunner) -> None:
 
     result = cli_runner.invoke(app, ["run", "--help"])
     assert result.exit_code == 0, result.output
-    assert "--backend" in result.output
-    assert "--obsidian-vault" in result.output
-    assert "--runs-dir" in result.output
+    output = _strip_ansi(result.output)
+    assert "--backend" in output
+    assert "--obsidian-vault" in output
+    assert "--runs-dir" in output
 
 
 def test_python_module_entrypoint_help_works() -> None:
@@ -112,8 +121,7 @@ def test_run_creates_run_dir_with_store_and_events(
 ) -> None:
     from researcher.cli import app
 
-    # Ensure no OPENROUTER_API_KEY / TAVILY_API_KEY so the CLI falls back to
-    # StubLLMClient + FileSeedsProvider on the native path.
+    # No API keys: --offline is the only key-free path.
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
@@ -129,6 +137,7 @@ def test_run_creates_run_dir_with_store_and_events(
             "test-run",
             "--backend",
             "api",
+            "--offline",
             "--fast-startup",
         ],
     )
@@ -200,14 +209,13 @@ def test_inspect_and_accept_default_to_human_output(
             "human-run",
             "--backend",
             "api",
+            "--offline",
             "--fast-startup",
         ],
     )
     assert run_result.exit_code == 0, run_result.output
 
-    inspect_result = cli_runner.invoke(
-        app, ["inspect", "human-run", "--runs-dir", str(runs_dir)]
-    )
+    inspect_result = cli_runner.invoke(app, ["inspect", "human-run", "--runs-dir", str(runs_dir)])
     assert inspect_result.exit_code == 0, inspect_result.output
     assert "run_id" in inspect_result.output
     assert "strict_field_fill" in inspect_result.output
@@ -376,6 +384,7 @@ def test_export_json_and_csv(
             "export-run",
             "--backend",
             "api",
+            "--offline",
             "--fast-startup",
         ],
     )
@@ -472,6 +481,7 @@ def test_run_accepts_items_csv(
             "items-run",
             "--backend",
             "api",
+            "--offline",
             "--fast-startup",
             "--items",
             str(items_path),
@@ -483,3 +493,167 @@ def test_run_accepts_items_csv(
     assert "loaded_items=2" in result.output
     meta = json.loads((runs_dir / "items-run" / "run.json").read_text())
     assert meta["items_path"] == str(items_path)
+
+
+# ---------- production safety / resume behavior ----------
+
+
+def test_run_without_api_key_fails_before_creating_run_dir(
+    cli_runner: CliRunner, minimal_spec: Path, tmp_path: Path, monkeypatch
+) -> None:
+    from researcher.cli import app
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    runs_dir = tmp_path / "runs"
+    result = cli_runner.invoke(
+        app,
+        [
+            "run",
+            str(minimal_spec),
+            "--runs-dir",
+            str(runs_dir),
+            "--run-id",
+            "no-key",
+            "--backend",
+            "api",
+            "--fast-startup",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "OPENROUTER_API_KEY" in result.output
+    assert not (runs_dir / "no-key").exists()
+    assert not runs_dir.exists()
+
+
+@pytest.mark.parametrize("run_id", ["../escape", "nested/run", ".hidden", "a..b"])
+def test_run_rejects_unsafe_run_ids(
+    cli_runner: CliRunner,
+    minimal_spec: Path,
+    tmp_path: Path,
+    monkeypatch,
+    run_id: str,
+) -> None:
+    from researcher.cli import app
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    runs_dir = tmp_path / "runs"
+    result = cli_runner.invoke(
+        app,
+        [
+            "run",
+            str(minimal_spec),
+            "--runs-dir",
+            str(runs_dir),
+            "--run-id",
+            run_id,
+            "--backend",
+            "api",
+            "--offline",
+            "--fast-startup",
+        ],
+    )
+    assert result.exit_code != 0
+    assert not (tmp_path / "escape").exists()
+    assert not (runs_dir / "nested").exists()
+
+
+def test_resume_restores_items_and_item_column(
+    cli_runner: CliRunner, minimal_spec: Path, tmp_path: Path, monkeypatch
+) -> None:
+    from researcher.cli import app
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    items_path = tmp_path / "items.csv"
+    items_path.write_text("name,id\nAlpha,a\nBeta,b\n")
+    runs_dir = tmp_path / "runs"
+    first = cli_runner.invoke(
+        app,
+        [
+            "run",
+            str(minimal_spec),
+            "--runs-dir",
+            str(runs_dir),
+            "--run-id",
+            "resume-items",
+            "--backend",
+            "api",
+            "--offline",
+            "--fast-startup",
+            "--items",
+            str(items_path),
+            "--item-column",
+            "id",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+
+    second = cli_runner.invoke(
+        app,
+        [
+            "run",
+            str(minimal_spec),
+            "--runs-dir",
+            str(runs_dir),
+            "--resume",
+            "resume-items",
+            "--backend",
+            "api",
+            "--offline",
+            "--fast-startup",
+        ],
+    )
+    assert second.exit_code == 0, second.output
+    assert "loaded_items=2" in second.output
+    meta = json.loads((runs_dir / "resume-items" / "run.json").read_text())
+    assert meta["items_path"] == str(items_path)
+    assert meta["item_column"] == "id"
+
+
+@pytest.mark.parametrize(
+    ("stop_reason", "expected_code"),
+    [("ERROR", 1), ("CTRL_C", 130)],
+)
+def test_run_maps_stop_reasons_to_exit_codes(
+    cli_runner: CliRunner,
+    minimal_spec: Path,
+    tmp_path: Path,
+    monkeypatch,
+    stop_reason: str,
+    expected_code: int,
+) -> None:
+    from researcher import orchestrator as orchestrator_module
+    from researcher.cli import app
+
+    async def fake_run(self):
+        return orchestrator_module.StopReason[stop_reason]
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(orchestrator_module.Orchestrator, "run", fake_run)
+    result = cli_runner.invoke(
+        app,
+        [
+            "run",
+            str(minimal_spec),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--run-id",
+            "exit-code",
+            "--backend",
+            "api",
+            "--offline",
+            "--fast-startup",
+        ],
+    )
+    assert result.exit_code == expected_code, result.output
+
+
+def test_fixture_file_prefers_packaged_copy() -> None:
+    from researcher.cli import _fixture_file
+
+    search_fixture = _fixture_file("offline_search", "wars")
+    pages_fixture = _fixture_file("offline_pages", "wars")
+    assert search_fixture is not None
+    assert pages_fixture is not None
+    assert "researcher/fixtures" in search_fixture.as_posix()
+    assert "researcher/fixtures" in pages_fixture.as_posix()
+    assert _fixture_file("offline_search", "does-not-exist") is None

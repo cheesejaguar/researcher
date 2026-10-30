@@ -17,6 +17,7 @@ from researcher.spec import (
 
 # ---------- RunSpec defaults ----------
 
+
 def test_runspec_defaults():
     s = RunSpec(
         spec_id="wars",
@@ -29,7 +30,11 @@ def test_runspec_defaults():
             )
         ],
         seeds=["major wars since 1500"],
-        models={"fast": "openrouter/hermes-3-8b", "smart": "openrouter/hermes-3-70b", "heavy": "anthropic/claude-sonnet-4-6"},
+        models={
+            "fast": "openrouter/hermes-3-8b",
+            "smart": "openrouter/hermes-3-70b",
+            "heavy": "anthropic/claude-sonnet-4-6",
+        },
     )
     assert s.budget_usd == 3.0
     assert s.wall_limit_s == 600
@@ -162,6 +167,7 @@ models:
 
 # ---------- build_entity_class ----------
 
+
 def test_build_entity_class_required_and_optional():
     spec = EntitySpec(
         name="War",
@@ -225,13 +231,10 @@ def test_build_entity_class_date_field():
 
 
 def test_build_entity_class_rejects_unknown_type():
-    spec = EntitySpec(
-        name="Bad",
-        fields=[FieldSpec(name="x", type="banana")],
-        search_templates=[],
-    )
-    with pytest.raises(ValueError, match="banana"):
-        build_entity_class(spec)
+    # Field types are validated eagerly so a bad spec fails at load time,
+    # before any run directory or store is created.
+    with pytest.raises(ValidationError, match="banana"):
+        FieldSpec(name="x", type="banana")
 
 
 def test_search_config_defaults():
@@ -242,6 +245,7 @@ def test_search_config_defaults():
 
 
 # ---------- Backend policy ----------
+
 
 def test_runspec_backend_policy_default():
     s = RunSpec(

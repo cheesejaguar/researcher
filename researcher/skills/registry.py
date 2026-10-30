@@ -28,11 +28,11 @@ _TYPE_MAP: dict[str, type] = {
 }
 
 
-def _resolve_field_type(type_str: str) -> type:
+def _resolve_field_type(type_str: str) -> Any:
     type_str = type_str.strip()
     if type_str.startswith("list[") and type_str.endswith("]"):
         inner = type_str[5:-1].strip()
-        return list[_TYPE_MAP.get(inner, str)]  # type: ignore[valid-type]
+        return list[_TYPE_MAP.get(inner, str)]  # type: ignore[misc]
     return _TYPE_MAP.get(type_str, str)
 
 

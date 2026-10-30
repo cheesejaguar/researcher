@@ -57,6 +57,10 @@ async def test_argv_construction_includes_required_flags(tmp_path: Path):
     assert "--skip-git-repo-check" in captured_argv
     assert "-m" in captured_argv
     assert "o4-mini" in captured_argv
+    # Codex must run inside its read-only sandbox. The old argv also passed
+    # --dangerously-bypass-approvals-and-sandbox, which disabled the very
+    # guardrail the sandbox flag was meant to enforce.
+    assert "--dangerously-bypass-approvals-and-sandbox" not in captured_argv
 
 
 @pytest.mark.asyncio

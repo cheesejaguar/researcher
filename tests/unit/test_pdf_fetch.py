@@ -6,7 +6,6 @@ import sys
 from collections.abc import Callable
 
 import httpx
-import pymupdf
 import pytest
 
 from researcher.extract.chunker import chunk_text
@@ -18,6 +17,7 @@ from researcher.fetch.readability import extract_readable
 
 def _build_pdf(pages: list[str]) -> bytes:
     """Build a minimal in-memory PDF with one page per string."""
+    pymupdf = pytest.importorskip("pymupdf")
     doc = pymupdf.open()
     try:
         for body in pages:

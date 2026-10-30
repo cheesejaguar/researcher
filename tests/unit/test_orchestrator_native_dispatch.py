@@ -88,7 +88,10 @@ async def _build_orchestrator(
     await store.open()
     llm = StubLLMClient()
     if patched_llm_entities is not None:
-        async def fake_structured(messages, schema, tier, task_id, temperature=0.0, schema_retry=True):
+
+        async def fake_structured(
+            messages, schema, tier, task_id, temperature=0.0, schema_retry=True
+        ):
             # DiscoverAgent expects `entities` field.
             if "entities" in schema.model_fields:
                 return schema(entities=patched_llm_entities)
@@ -140,7 +143,12 @@ async def test_native_dispatch_runs_discover_agent_and_submits_claims() -> None:
 
     # The run should have completed without error, and the writer should have
     # received at least one claim from the native DiscoverAgent.
-    assert reason in (StopReason.NO_TASKS, StopReason.PLATEAU, StopReason.BUDGET, StopReason.DEADLINE)
+    assert reason in (
+        StopReason.NO_TASKS,
+        StopReason.PLATEAU,
+        StopReason.BUDGET,
+        StopReason.DEADLINE,
+    )
     assert writer.metrics["submitted"] >= 1
 
 
@@ -238,14 +246,18 @@ async def test_native_dispatch_propagates_enum_into_entity_schema() -> None:
         from researcher.models import Task, TaskKind
         from researcher.storage.store import FieldCell
 
-        eid = await store.upsert_entity("War", "WWII", {
-            "name": FieldCell(
-                value="WWII",
-                confidence=1.0,
-                provenance_ids=[],
-                updated_at=datetime.now(UTC),
-            )
-        })
+        eid = await store.upsert_entity(
+            "War",
+            "WWII",
+            {
+                "name": FieldCell(
+                    value="WWII",
+                    confidence=1.0,
+                    provenance_ids=[],
+                    updated_at=datetime.now(UTC),
+                )
+            },
+        )
         task = Task(
             kind=TaskKind.EXPAND,
             spec_ref="wars",

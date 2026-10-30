@@ -32,20 +32,21 @@ the guaranteed development command.
 
 ```bash
 uv run pytest -q                  # full Python suite
-uv run ruff check researcher tests # lint the package and tests
-uv run ruff format --check researcher tests
-cd tui && npm test -- --run       # TUI unit tests
+uv run ruff check .               # lint the package, tests, and docs
+uv run ruff format --check .      # formatting is CI-gated
+uv run mypy researcher            # type checking is CI-gated
+cd tui && npm test                # TUI unit tests
 cd tui && npm run build           # TypeScript/Ink build
 ```
 
-As of 2026-04-28, the expected local snapshot is `533 passed, 1 skipped` for
+As of 2026-10-30, the expected local snapshot is `589 passed, 1 skipped` for
 Python and `17 passed` for the TUI. Counts will change as features land; the
 commands above are the source of truth.
 
 ## Coding Standards
 
-- **Python style:** enforced by [ruff](https://docs.astral.sh/ruff/) with the config in `pyproject.toml`. Run `uv run ruff check researcher tests --fix` to auto-fix package and test issues.
-- **Type hints:** all public functions must be typed. `mypy` is in the dev group but not yet CI-gated.
+- **Python style:** enforced by [ruff](https://docs.astral.sh/ruff/) with the config in `pyproject.toml`. Run `uv run ruff check . --fix` to auto-fix package and test issues.
+- **Type hints:** all public functions must be typed. `uv run mypy researcher` is CI-gated.
 - **Imports:** use `from __future__ import annotations` in every module. Lazy imports are encouraged for heavy deps (DuckDB, sentence-transformers) to keep `python -m researcher --help` fast.
 - **No docstrings on obvious code.** Only add comments where the logic isn't self-evident.
 - **Tests:** TDD discipline — write failing tests first, then implement. Each feature ships with its own test file under `tests/unit/`.
@@ -95,7 +96,7 @@ PR:
 1. **Fork and branch.** Create a feature branch from `main`.
 2. **Small, focused PRs.** One logical change per PR. If a feature touches 5+ files, that's fine — but don't bundle unrelated changes.
 3. **Write tests first.** Every PR that adds or changes behavior must include tests. Regressions are caught by the existing Python and TUI suites.
-4. **Lint clean.** `uv run ruff check researcher tests` must pass with zero errors.
+4. **Lint clean.** `uv run ruff check .` and `uv run mypy researcher` must pass with zero errors.
 5. **Descriptive commit messages.** Lead with the subsystem (`cli:`, `storage:`, `agents:`, `spec:`, etc.), then a concise summary of what changed and why. The "why" matters more than the "what."
 6. **Fill out the PR template.** Summary + test plan.
 

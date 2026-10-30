@@ -33,6 +33,10 @@ from researcher.storage.store import KnowledgeStore
 
 class _DiscoverResponse(BaseModel):
     entities: list[str] = []
+    # Optional mapping from entity name to the source URL that supports it.
+    # Older prompts/models omit this; those claims fall back to the primary
+    # fetched source.
+    entity_sources: dict[str, str] = {}
 
 
 class DiscoverAgent(Agent):
@@ -51,9 +55,7 @@ class DiscoverAgent(Agent):
         entity_schema: dict,
         goal: str,
     ) -> None:
-        super().__init__(
-            agent_id=agent_id, llm=llm, store=store, emit=emit, run_id=run_id
-        )
+        super().__init__(agent_id=agent_id, llm=llm, store=store, emit=emit, run_id=run_id)
         self._deps = deps
         self._entity_schema = entity_schema
         self._goal = goal
@@ -123,12 +125,8 @@ class DiscoverAgent(Agent):
                 if c.prompt_fragment.strip()
             ]
             if fragments:
-                skill_text = "\n\nDomain guidance:\n" + "\n".join(
-                    f"- {f}" for f in fragments
-                )
-        combined_context = "\n\n---\n\n".join(
-            f"SOURCE: {url}\n{body}" for url, body in fetched
-        )
+                skill_text = "\n\nDomain guidance:\n" + "\n".join(f"- {f}" for f in fragments)
+        combined_context = "\n\n---\n\n".join(f"SOURCE: {url}\n{body}" for url, body in fetched)
         messages = [
             {
                 "role": "system",
@@ -144,7 +142,10 @@ class DiscoverAgent(Agent):
                     f"Seed query: {query}\n"
                     f"Entity type: {entity_type}\n\n"
                     f"From the sources below, list the distinct {entity_type} "
-                    f"entity names you find.{skill_text}\n\n{combined_context}"
+                    f"entity names you find in `entities`. Also populate "
+                    f"`entity_sources` as an object mapping each entity name to "
+                    f"the exact SOURCE URL that supports it."
+                    f"{skill_text}\n\n{combined_context}"
                 ),
             },
         ]
@@ -169,18 +170,26 @@ class DiscoverAgent(Agent):
 
         claims: list[FactClaim] = []
         now = datetime.now(UTC)
-        primary_url, primary_snippet = fetched[0]
-        confidence = 0.7
-        if self._deps.source_policy is not None:
-            confidence = min(0.95, 0.55 + 0.3 * source_authority(primary_url, self._deps.source_policy))
+        default_url, default_body = fetched[0]
+        source_bodies = dict(fetched)
         for name in response.entities:
             name = (name or "").strip()
             if not name:
                 continue
+            source_url = response.entity_sources.get(name, default_url)
+            if source_url not in source_bodies:
+                source_url = default_url
+            snippet = source_bodies[source_url][:500]
+            confidence = 0.7
+            if self._deps.source_policy is not None:
+                confidence = min(
+                    0.95,
+                    0.55 + 0.3 * source_authority(source_url, self._deps.source_policy),
+                )
             prov = Provenance(
-                url=primary_url,
+                url=source_url,
                 fetched_at=now,
-                snippet=primary_snippet[:500],
+                snippet=snippet,
                 extractor_model="native/discover",
                 agent_id=self.agent_id,
                 task_id=task.id,

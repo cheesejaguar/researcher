@@ -207,7 +207,9 @@ async def test_run_emits_info_log_on_empty_extractions():
     assert result.state == AgentState.DONE
     assert result.claims == []
     info_logs = [e for e in bus.events if isinstance(e, AgentLog) and e.payload.level == "info"]
-    assert any("0 extractions" in log.payload.msg or "empty" in log.payload.msg for log in info_logs)
+    assert any(
+        "0 extractions" in log.payload.msg or "empty" in log.payload.msg for log in info_logs
+    )
 
 
 @pytest.mark.asyncio

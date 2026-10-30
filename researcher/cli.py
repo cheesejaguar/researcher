@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -64,11 +65,33 @@ async def _default_embed_fn(texts: list[str]) -> list[list[float]]:
     return _default_embed_fn_sync(texts)
 
 
+_RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _validate_run_id(run_id: str, *, option: str = "--run-id") -> str:
+    """Reject run IDs that could escape ``runs_dir``.
+
+    Run IDs are interpolated into directory paths by nearly every command,
+    so a value like ``../../etc`` must never reach the filesystem.
+    """
+    if not _RUN_ID_RE.fullmatch(run_id) or ".." in run_id:
+        raise typer.BadParameter(
+            f"{option} must start with a letter or digit and contain only "
+            "letters, digits, '.', '_' or '-'"
+        )
+    return run_id
+
+
+def _safe_run_dir(runs_dir: Path, run_id: str, *, option: str = "run_id") -> Path:
+    return runs_dir / _validate_run_id(run_id, option=option)
+
+
 def _generate_run_id(spec_path: Path) -> str:
     from datetime import datetime
 
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return f"{spec_path.stem}-{ts}"
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", spec_path.stem).strip(".-") or "run"
+    return f"{stem}-{ts}"
 
 
 def _project_root() -> Path:
@@ -154,12 +177,18 @@ def _print_run_next_steps(run_id: str, runs_dir: Path, run_dir: Path) -> None:
     typer.echo(f"  inspect: uv run python -m researcher inspect {run_id} --runs-dir {runs_dir}")
     typer.echo(f"  accept:  uv run python -m researcher accept {run_id} --runs-dir {runs_dir}")
     if events_path.exists():
-        typer.echo(f"  replay:  uv run python -m researcher watch {run_id} --runs-dir {runs_dir} --replay")
+        typer.echo(
+            f"  replay:  uv run python -m researcher watch {run_id} --runs-dir {runs_dir} --replay"
+        )
     if db_path.exists():
         typer.echo(f"  db:      {db_path}")
-        typer.echo(f"  export:  uv run python -m researcher export {run_id} --runs-dir {runs_dir} --format csv")
+        typer.echo(
+            f"  export:  uv run python -m researcher export {run_id} --runs-dir {runs_dir} --format csv"
+        )
         typer.echo(f"  report:  uv run python -m researcher report {run_id} --runs-dir {runs_dir}")
-        typer.echo(f"  evidence: uv run python -m researcher evidence {run_id} --runs-dir {runs_dir}")
+        typer.echo(
+            f"  evidence: uv run python -m researcher evidence {run_id} --runs-dir {runs_dir}"
+        )
 
 
 def _write_text_output(text: str, output: Path | None) -> None:
@@ -220,7 +249,9 @@ def doctor(
     add(
         "tui_build",
         "pass" if tui_entry.exists() else ("warn" if tui_pkg.exists() else "fail"),
-        str(tui_entry) if tui_entry.exists() else "build with `cd tui && npm install && npm run build`",
+        str(tui_entry)
+        if tui_entry.exists()
+        else "build with `cd tui && npm install && npm run build`",
     )
 
     claude = shutil.which("claude")
@@ -230,7 +261,9 @@ def doctor(
     add(
         "openrouter",
         "pass" if os.environ.get("OPENROUTER_API_KEY") else "warn",
-        "OPENROUTER_API_KEY set" if os.environ.get("OPENROUTER_API_KEY") else "OPENROUTER_API_KEY missing",
+        "OPENROUTER_API_KEY set"
+        if os.environ.get("OPENROUTER_API_KEY")
+        else "OPENROUTER_API_KEY missing",
     )
 
     try:
@@ -255,7 +288,9 @@ def doctor(
                 add(
                     "search",
                     "pass" if os.environ.get(key_env) else "warn",
-                    f"{provider} via {key_env}" if os.environ.get(key_env) else f"{provider} key {key_env} missing",
+                    f"{provider} via {key_env}"
+                    if os.environ.get(key_env)
+                    else f"{provider} key {key_env} missing",
                 )
             else:
                 add("search", "pass", provider)
@@ -271,13 +306,17 @@ def doctor(
             if spec_obj.source_sets:
                 source_paths = sum(len(s.paths) for s in spec_obj.source_sets)
                 source_urls = sum(len(s.urls) for s in spec_obj.source_sets)
-                add("source_sets", "pass", f"sets={len(spec_obj.source_sets)} paths={source_paths} urls={source_urls}")
-            offline_search = Path("tests") / "fixtures" / "offline_search" / f"{spec_obj.spec_id}.json"
-            offline_pages = Path("tests") / "fixtures" / "offline_pages" / f"{spec_obj.spec_id}.json"
+                add(
+                    "source_sets",
+                    "pass",
+                    f"sets={len(spec_obj.source_sets)} paths={source_paths} urls={source_urls}",
+                )
+            offline_search = _fixture_file("offline_search", spec_obj.spec_id)
+            offline_pages = _fixture_file("offline_pages", spec_obj.spec_id)
             add(
                 "offline_fixtures",
-                "pass" if offline_search.exists() and offline_pages.exists() else "warn",
-                f"{offline_search}, {offline_pages}",
+                "pass" if offline_search and offline_pages else "warn",
+                f"{offline_search or 'missing'}, {offline_pages or 'missing'}",
             )
             vault = obsidian_vault or spec_obj.obsidian_vault or ""
             if vault:
@@ -475,17 +514,40 @@ def run(
 
     metadata_spec = _load_run_spec(spec)
 
+    # Fail before touching the filesystem rather than silently substituting a
+    # deterministic stub for a real model client. ``--offline`` is the only
+    # supported key-free path.
+    if not offline and not os.environ.get("OPENROUTER_API_KEY"):
+        raise typer.BadParameter(
+            "OPENROUTER_API_KEY is not set. Export it, or pass --offline to "
+            "run against deterministic local fixtures."
+        )
+
     # When resuming, the run_id is dictated by --resume; the existing run
     # directory must already exist on disk so we can reopen its DuckDB.
+    if run_id:
+        _validate_run_id(run_id, option="--run-id")
+    if resume:
+        _validate_run_id(resume, option="--resume")
     actual_run_id = resume if resume else (run_id or _generate_run_id(spec))
-    run_dir = runs_dir / actual_run_id
+    run_dir = _safe_run_dir(runs_dir, actual_run_id)
+    previous_metadata = _read_run_metadata(run_dir) if resume else {}
+    if resume and items is None and previous_metadata.get("items_path"):
+        items = Path(str(previous_metadata["items_path"]))
+    if (
+        resume
+        and items is not None
+        and item_column == "name"
+        and previous_metadata.get("item_column")
+    ):
+        item_column = str(previous_metadata["item_column"])
     run_dir.mkdir(parents=True, exist_ok=True)
     try:
         _stop_request_path(run_dir).unlink()
     except FileNotFoundError:
         pass
-    _write_run_metadata(
-        run_dir,
+    metadata = dict(previous_metadata) if resume else {}
+    metadata.update(
         {
             "run_id": actual_run_id,
             "spec_id": metadata_spec.spec_id,
@@ -500,8 +562,9 @@ def run(
             "runs_dir": str(runs_dir),
             "items_path": str(items) if items else "",
             "item_column": item_column,
-        },
+        }
     )
+    _write_run_metadata(run_dir, metadata)
 
     typer.echo(
         f"[researcher run] spec={spec} run_id={actual_run_id} "
@@ -529,6 +592,14 @@ def run(
         )
     )
     typer.echo(f"[researcher run] done reason={reason.value}")
+    if reason.value == "error":
+        typer.echo(
+            "[researcher run] run failed; see events.jsonl for details",
+            err=True,
+        )
+        raise typer.Exit(1)
+    if reason.value == "ctrl_c":
+        raise typer.Exit(130)
     _print_run_next_steps(actual_run_id, runs_dir, run_dir)
 
 
@@ -575,6 +646,7 @@ async def _execute_run(
     from researcher.fetch.http import HttpFetcher
     from researcher.fetch.politeness import PolitenessLimiter
     from researcher.integrations.obsidian import ObsidianWriter
+    from researcher.llm.client import LLMClient
     from researcher.llm.embedder import LocalEmbedder
     from researcher.llm.offline import OfflineFixtureLLM
     from researcher.llm.openrouter import OpenRouterClient
@@ -583,7 +655,9 @@ async def _execute_run(
     from researcher.orchestrator import Orchestrator
     from researcher.scheduler import Scheduler
     from researcher.search.base import SearchProvider
+    from researcher.search.brave import BraveProvider
     from researcher.search.file_seeds import FileSeedsProvider
+    from researcher.search.serper import SerperProvider
     from researcher.search.tavily import TavilyProvider
     from researcher.skills.registry import SkillRegistry
     from researcher.sources import (
@@ -596,7 +670,6 @@ async def _execute_run(
     from researcher.storage.duckdb_store import DuckDBKnowledgeStore
     from researcher.storage.resolver import DefaultEntityResolver
     from researcher.storage.writer import FactWriter
-    from tests.stubs.llm import StubLLMClient
 
     spec_obj = load_spec(spec_path)
     if items_path is not None:
@@ -617,7 +690,8 @@ async def _execute_run(
     entity_schema_dict = {
         "entity_type": primary_entity.name,
         "fields": [
-            {"name": f.name, "type": f.type, "required": f.required, "enum": list(f.enum)} for f in primary_entity.fields
+            {"name": f.name, "type": f.type, "required": f.required, "enum": list(f.enum)}
+            for f in primary_entity.fields
         ],
     }
 
@@ -771,6 +845,8 @@ async def _execute_run(
             budget = Budget(
                 usd_cap=spec_obj.budget_usd,
                 wall_cap_s=spec_obj.wall_limit_s,
+                per_task_fraction=spec_obj.per_task_fraction,
+                per_entity_fraction=spec_obj.per_entity_fraction,
                 max_subagent_calls=spec_obj.max_subagent_calls,
             )
 
@@ -779,19 +855,26 @@ async def _execute_run(
                 scheduler.restore(sched_data)
                 budget.restore(budget_data)
 
-            # LLM client: real OpenRouter when OPENROUTER_API_KEY is set and the
-            # run isn't forced offline; otherwise the deterministic test stub.
+            # LLM client: real OpenRouter unless the run is explicitly offline.
+            # Never fall back to a test stub in production.
+            llm: LLMClient
             if offline:
                 llm = OfflineFixtureLLM()
-            elif not os.environ.get("OPENROUTER_API_KEY"):
-                llm = StubLLMClient()
             else:
+                api_key = os.environ.get("OPENROUTER_API_KEY", "")
+                if not api_key:
+                    raise typer.BadParameter(
+                        "OPENROUTER_API_KEY is not set. Export it, or pass "
+                        "--offline to use deterministic fixtures."
+                    )
                 llm = OpenRouterClient(
+                    api_key=api_key,
                     model_map={
                         LLMTier.FAST: spec_obj.models.get("fast", "anthropic/claude-haiku-4.5"),
                         LLMTier.SMART: spec_obj.models.get("smart", "anthropic/claude-sonnet-4.6"),
                         LLMTier.HEAVY: spec_obj.models.get("heavy", "anthropic/claude-opus-4.6"),
                     },
+                    pricing=spec_obj.model_pricing,
                 )
             # Wire the LLM's cost tracker into the store so snapshot_metrics
             # reports real USD spend instead of hardcoded 0.0.
@@ -871,30 +954,57 @@ async def _execute_run(
             # when TAVILY_API_KEY is set; fall back to an empty FileSeedsProvider.
             if backend != "cli":
                 search_provider: SearchProvider
+                provider = spec_obj.search.provider
+                default_env = {
+                    "tavily": "TAVILY_API_KEY",
+                    "brave": "BRAVE_API_KEY",
+                    "serper": "SERPER_API_KEY",
+                    "exa_mcp": "EXA_API_KEY",
+                }
+                key_env = spec_obj.search.api_key_env or default_env.get(provider, "")
+                if key_env == "TAVILY_API_KEY" and provider != "tavily":
+                    key_env = default_env.get(provider, key_env)
+
                 if offline:
-                    fixture_path = Path("tests") / "fixtures" / "offline_search" / f"{spec_obj.spec_id}.json"
-                    if fixture_path.exists():
+                    fixture_path = _fixture_file("offline_search", spec_obj.spec_id)
+                    if fixture_path is not None:
                         search_provider = FileSeedsProvider.from_file(fixture_path)
                         typer.echo(f"[researcher run] search=offline_fixtures path={fixture_path}")
                     else:
                         search_provider = FileSeedsProvider(seeds={})
                         typer.echo(
-                            f"[researcher run] search=offline_fixtures missing path={fixture_path}",
+                            "[researcher run] search=offline_fixtures missing "
+                            f"for spec_id={spec_obj.spec_id}",
                             err=True,
                         )
-                elif (
-                    spec_obj.search.provider == "tavily"
-                    and os.environ.get(spec_obj.search.api_key_env or "TAVILY_API_KEY")
-                ):
-                    search_provider = TavilyProvider()
+                elif provider == "file_seeds":
+                    search_provider = FileSeedsProvider(seeds={})
                     typer.echo(
-                        f"[researcher run] search=tavily key_env={spec_obj.search.api_key_env or 'TAVILY_API_KEY'}"
+                        "[researcher run] search=file_seeds without a fixture path; "
+                        "native discovery may return no web results",
+                        err=True,
                     )
+                elif provider == "exa_mcp":
+                    search_provider = FileSeedsProvider(seeds={})
+                    typer.echo(
+                        "[researcher run] search=exa_mcp is unavailable in the CLI "
+                        "(MCP transport is not wired); native discovery may return "
+                        "no web results",
+                        err=True,
+                    )
+                elif os.environ.get(key_env):
+                    if provider == "tavily":
+                        search_provider = TavilyProvider(api_key=os.environ[key_env])
+                    elif provider == "brave":
+                        search_provider = BraveProvider(api_key=os.environ[key_env])
+                    else:
+                        search_provider = SerperProvider(api_key=os.environ[key_env])
+                    typer.echo(f"[researcher run] search={provider} key_env={key_env}")
                 else:
                     search_provider = FileSeedsProvider(seeds={})
                     typer.echo(
-                        f"[researcher run] search={spec_obj.search.provider} unavailable; "
-                        f"missing {spec_obj.search.api_key_env or 'TAVILY_API_KEY'}, native discovery may return no web results",
+                        f"[researcher run] search={provider} unavailable; "
+                        f"missing {key_env}, native discovery may return no web results",
                         err=True,
                     )
                 chunk_dicts = _source_chunks_for_search(source_records, source_chunks)
@@ -912,15 +1022,13 @@ async def _execute_run(
                         legacy_allowlist=spec_obj.domain_allowlist,
                     )
 
-                http_client = (
-                    _offline_fixture_http_client(spec_obj.spec_id)
-                    if offline
-                    else None
-                )
+                http_client = _offline_fixture_http_client(spec_obj.spec_id) if offline else None
                 http_fetcher = HttpFetcher(
                     politeness=PolitenessLimiter(),
                     client=http_client,
                     max_retries=1 if offline else 3,
+                    source_policy=spec_obj.source_policy,
+                    legacy_allowlist=spec_obj.domain_allowlist,
                 )
                 native_deps = NativeAgentDeps(
                     search=search_provider,
@@ -929,6 +1037,8 @@ async def _execute_run(
                     max_fetch_per_task=3,
                     skill_registry=skill_registry,
                     source_policy=spec_obj.source_policy,
+                    relations=spec_obj.relations,
+                    max_depth=spec_obj.max_depth,
                 )
                 orch.set_native_deps(native_deps)
 
@@ -937,7 +1047,34 @@ async def _execute_run(
 
                 orch.set_interrupt_handler(StdinInterruptHandler())
 
-            reason = await orch.run()
+            # Turn SIGINT/SIGTERM into the same cooperative stop signal the
+            # ``researcher stop`` command uses, so the orchestrator can drain
+            # the current batch, checkpoint, and write a run summary.
+            import signal
+
+            loop = _asyncio.get_running_loop()
+            stop_path = Path(stop_file or _stop_request_path(run_dir))
+            installed_signals: list[signal.Signals] = []
+
+            def _request_stop(signum: int) -> None:
+                try:
+                    stop_path.write_text(f"signal={signum}\n", encoding="utf-8")
+                except OSError:
+                    pass
+
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    loop.add_signal_handler(sig, _request_stop, int(sig))
+                except (NotImplementedError, RuntimeError, ValueError):
+                    continue
+                else:
+                    installed_signals.append(sig)
+
+            try:
+                reason = await orch.run()
+            finally:
+                for sig in installed_signals:
+                    loop.remove_signal_handler(sig)
             return reason
         finally:
             if tui_proc is not None:
@@ -975,7 +1112,7 @@ def watch(
     ),
 ) -> None:
     """Attach the TUI to a running (or completed) run."""
-    run_dir = runs_dir / run_id
+    run_dir = _safe_run_dir(runs_dir, run_id)
     tui_entry = _tui_entry_or_build(auto_build=True)
 
     if replay:
@@ -1020,7 +1157,7 @@ def inspect(
     ),
 ) -> None:
     """Print a summary of a completed run (entity count, fill %, cost, etc.)."""
-    db_path = runs_dir / run_id / "store.duckdb"
+    db_path = _safe_run_dir(runs_dir, run_id) / "store.duckdb"
     if not db_path.exists():
         raise typer.BadParameter(f"no store found at {db_path}")
     payload = _inspect_payload(db_path=db_path, run_id=run_id)
@@ -1042,9 +1179,7 @@ def accept(
     min_field_fill: float = typer.Option(
         0.70, "--min-field-fill", help="Minimum strict field-fill ratio."
     ),
-    max_cost_usd: float = typer.Option(
-        3.0, "--max-cost-usd", help="Maximum accepted USD spend."
-    ),
+    max_cost_usd: float = typer.Option(3.0, "--max-cost-usd", help="Maximum accepted USD spend."),
     max_wall_s: float = typer.Option(
         600.0, "--max-wall-s", help="Maximum accepted wall time in seconds."
     ),
@@ -1055,7 +1190,7 @@ def accept(
     ),
 ) -> None:
     """Check a completed run against the v1 acceptance metrics."""
-    db_path = runs_dir / run_id / "store.duckdb"
+    db_path = _safe_run_dir(runs_dir, run_id) / "store.duckdb"
     if not db_path.exists():
         raise typer.BadParameter(f"no store found at {db_path}")
     metrics = _inspect_payload(db_path=db_path, run_id=run_id)
@@ -1108,16 +1243,12 @@ def _inspect_payload(db_path: Path, run_id: str) -> dict:
             _scalar(con, "SELECT COUNT(*) FROM fields WHERE value_json != 'null'", 0)
         )
         persisted_fill_pct = (
-            float(persisted_filled) / float(persisted_total)
-            if persisted_total
-            else 0.0
+            float(persisted_filled) / float(persisted_total) if persisted_total else 0.0
         )
         schema_fields = _schema_field_names(con)
         strict_total = int(entities_total) * len(schema_fields)
         strict_fill_pct = (
-            float(persisted_filled) / float(strict_total)
-            if strict_total
-            else persisted_fill_pct
+            float(persisted_filled) / float(strict_total) if strict_total else persisted_fill_pct
         )
         summary = _latest_summary(con, run_id)
         return {
@@ -1132,9 +1263,7 @@ def _inspect_payload(db_path: Path, run_id: str) -> dict:
             "cost_usd": float(summary.get("cost_usd", 0.0) or 0.0),
             "wall_s": float(summary.get("wall_s", 0.0) or 0.0),
             "reason": summary.get("reason"),
-            "subagent_calls_total": int(
-                summary.get("subagent_calls_total", 0) or 0
-            ),
+            "subagent_calls_total": int(summary.get("subagent_calls_total", 0) or 0),
             "summary": summary,
         }
     finally:
@@ -1152,7 +1281,10 @@ def _print_inspect_human(payload: dict[str, Any]) -> None:
             ("entities", payload.get("entities_total")),
             ("entities_by_type", json.dumps(payload.get("entities_by_type", {}), sort_keys=True)),
             ("strict_field_fill", _pct(float(payload.get("strict_fields_filled_pct") or 0.0))),
-            ("persisted_field_fill", _pct(float(payload.get("persisted_fields_filled_pct") or 0.0))),
+            (
+                "persisted_field_fill",
+                _pct(float(payload.get("persisted_fields_filled_pct") or 0.0)),
+            ),
             ("conflicts_open", payload.get("conflicts_open")),
             ("cost_usd", f"${float(payload.get('cost_usd') or 0.0):.4f}"),
             ("wall_s", f"{float(payload.get('wall_s') or 0.0):.1f}"),
@@ -1199,8 +1331,7 @@ def _scalar(con, sql: str, default):
 def _latest_summary(con, run_id: str) -> dict:
     rows = _rows(
         con,
-        "SELECT summary_json FROM run_summary WHERE run_id = ? "
-        "ORDER BY started_at DESC LIMIT 1",
+        "SELECT summary_json FROM run_summary WHERE run_id = ? ORDER BY started_at DESC LIMIT 1",
         [run_id],
     )
     if not rows:
@@ -1228,11 +1359,27 @@ def _schema_field_names(con) -> list[str]:
     return sorted(str(k) for k in props)
 
 
+def _fixture_file(kind: str, spec_id: str) -> Path | None:
+    """Locate an offline fixture in package data, then in a source checkout.
+
+    Package data makes ``--offline`` work from an installed wheel; the
+    repository fallback keeps the developer workflow unchanged.
+    """
+    candidates = [
+        Path(__file__).parent / "fixtures" / kind / f"{spec_id}.json",
+        Path.cwd() / "tests" / "fixtures" / kind / f"{spec_id}.json",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def _offline_fixture_http_client(spec_id: str):
     import httpx
 
-    path = Path("tests") / "fixtures" / "offline_pages" / f"{spec_id}.json"
-    pages = json.loads(path.read_text()) if path.exists() else {}
+    path = _fixture_file("offline_pages", spec_id)
+    pages = json.loads(path.read_text()) if path is not None else {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -1253,10 +1400,7 @@ def _offline_fixture_http_client(spec_id: str):
 
 
 def _source_chunks_for_search(sources: list, chunks: list) -> list[dict[str, Any]]:
-    by_id = {
-        source.source_id: source
-        for source in sources
-    }
+    by_id = {source.source_id: source for source in sources}
     rows: list[dict[str, Any]] = []
     for chunk in chunks:
         source = by_id.get(chunk.source_id)
@@ -1299,7 +1443,7 @@ def resume(
     """Resume a previously-paused run from its last checkpoint."""
     if backend and backend not in ("auto", "cli", "api"):
         raise typer.BadParameter(f"--backend must be one of auto|cli|api, got {backend!r}")
-    run_dir = runs_dir / run_id
+    run_dir = _safe_run_dir(runs_dir, run_id)
     if not run_dir.exists():
         raise typer.BadParameter(f"run directory not found: {run_dir}")
     metadata = _read_run_metadata(run_dir)
@@ -1316,9 +1460,7 @@ def resume(
     if offline and resolved_backend == "cli":
         raise typer.BadParameter("stored run is offline and cannot resume with backend=cli")
 
-    typer.echo(
-        f"[researcher resume] run_id={run_id} spec={spec_path} backend={resolved_backend}"
-    )
+    typer.echo(f"[researcher resume] run_id={run_id} spec={spec_path} backend={resolved_backend}")
     try:
         _stop_request_path(run_dir).unlink()
     except FileNotFoundError:
@@ -1356,7 +1498,7 @@ def stop(
     ),
 ) -> None:
     """Send a graceful stop signal to a running orchestrator."""
-    run_dir = runs_dir / run_id
+    run_dir = _safe_run_dir(runs_dir, run_id)
     if not run_dir.exists():
         raise typer.BadParameter(f"run directory not found: {run_dir}")
     payload = {
@@ -1391,7 +1533,7 @@ def export_run(
     """Export completed run entities for non-SQL downstream use."""
     if fmt not in {"json", "csv", "markdown", "obsidian"}:
         raise typer.BadParameter("--format must be one of json|csv|markdown|obsidian")
-    db_path = runs_dir / run_id / "store.duckdb"
+    db_path = _safe_run_dir(runs_dir, run_id) / "store.duckdb"
     if not db_path.exists():
         raise typer.BadParameter(f"no store found at {db_path}")
     entities = _export_entities(db_path)
@@ -1409,7 +1551,7 @@ def export_run(
         _write_or_echo(text, output)
         return
 
-    target = output or (runs_dir / run_id / "export_obsidian")
+    target = output or (_safe_run_dir(runs_dir, run_id) / "export_obsidian")
     target.mkdir(parents=True, exist_ok=True)
     for entity in entities:
         entity_type = str(entity.get("type") or "Entity")
@@ -1426,8 +1568,12 @@ def export_run(
 @sources_app.command("build")
 def sources_build(
     spec: Path = typer.Argument(..., exists=True, readable=True, help="RunSpec with source_sets."),
-    run_id: str = typer.Option("source-pack", "--run-id", help="Run id whose DuckDB store receives sources."),
-    runs_dir: Path = typer.Option(Path("runs"), "--runs-dir", help="Directory where run artifacts live."),
+    run_id: str = typer.Option(
+        "source-pack", "--run-id", help="Run id whose DuckDB store receives sources."
+    ),
+    runs_dir: Path = typer.Option(
+        Path("runs"), "--runs-dir", help="Directory where run artifacts live."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit compact JSON."),
 ) -> None:
     """Ingest source_sets from a spec into a run DuckDB store."""
@@ -1440,7 +1586,7 @@ def sources_build(
 
         spec_obj = load_spec(spec)
         records, chunks = ingest_source_sets(spec_obj.source_sets)
-        run_dir = runs_dir / run_id
+        run_dir = _safe_run_dir(runs_dir, run_id)
         run_dir.mkdir(parents=True, exist_ok=True)
         store = DuckDBKnowledgeStore(run_dir / "store.duckdb")
         await store.open()
@@ -1468,13 +1614,15 @@ def sources_build(
 @sources_app.command("inspect")
 def sources_inspect(
     run_id: str = typer.Argument(..., help="Run id to inspect."),
-    runs_dir: Path = typer.Option(Path("runs"), "--runs-dir", help="Directory where run artifacts live."),
+    runs_dir: Path = typer.Option(
+        Path("runs"), "--runs-dir", help="Directory where run artifacts live."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit compact JSON."),
 ) -> None:
     """List source-pack records stored in a completed run."""
     from researcher.reporting import source_summary
 
-    db_path = runs_dir / run_id / "store.duckdb"
+    db_path = _safe_run_dir(runs_dir, run_id) / "store.duckdb"
     if not db_path.exists():
         raise typer.BadParameter(f"no store found at {db_path}")
     rows = source_summary(db_path)
@@ -1494,21 +1642,27 @@ def sources_inspect(
 @app.command()
 def evidence(
     run_id: str = typer.Argument(..., help="Run id to export evidence for."),
-    runs_dir: Path = typer.Option(Path("runs"), "--runs-dir", help="Directory where run artifacts live."),
+    runs_dir: Path = typer.Option(
+        Path("runs"), "--runs-dir", help="Directory where run artifacts live."
+    ),
     fmt: str = typer.Option("csv", "--format", help="Evidence format: csv | md | json."),
-    output: Path | None = typer.Option(None, "--output", "-o", help="Output file; defaults to stdout."),
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="Output file; defaults to stdout."
+    ),
 ) -> None:
     """Emit a quote/provenance-backed evidence matrix."""
     from researcher.reporting import evidence_rows, render_evidence_csv, render_evidence_markdown
 
     if fmt not in {"csv", "md", "json"}:
         raise typer.BadParameter("--format must be one of csv|md|json")
-    db_path = runs_dir / run_id / "store.duckdb"
+    db_path = _safe_run_dir(runs_dir, run_id) / "store.duckdb"
     if not db_path.exists():
         raise typer.BadParameter(f"no store found at {db_path}")
     rows = evidence_rows(db_path, run_id=run_id)
     if fmt == "json":
-        _write_text_output(json.dumps({"run_id": run_id, "evidence": rows}, indent=2, default=str), output)
+        _write_text_output(
+            json.dumps({"run_id": run_id, "evidence": rows}, indent=2, default=str), output
+        )
     elif fmt == "md":
         _write_text_output(render_evidence_markdown(rows), output)
     else:
@@ -1518,10 +1672,16 @@ def evidence(
 @app.command()
 def report(
     run_id: str = typer.Argument(..., help="Run id to render."),
-    runs_dir: Path = typer.Option(Path("runs"), "--runs-dir", help="Directory where run artifacts live."),
+    runs_dir: Path = typer.Option(
+        Path("runs"), "--runs-dir", help="Directory where run artifacts live."
+    ),
     fmt: str = typer.Option("md", "--format", help="Report format: md | html | json."),
-    template: str = typer.Option("analyst", "--template", help="Report template: analyst | systematic | brief."),
-    output: Path | None = typer.Option(None, "--output", "-o", help="Output file; defaults to stdout."),
+    template: str = typer.Option(
+        "analyst", "--template", help="Report template: analyst | systematic | brief."
+    ),
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="Output file; defaults to stdout."
+    ),
 ) -> None:
     """Render a cited research report with source appendix."""
     from researcher.reporting import (
@@ -1535,7 +1695,7 @@ def report(
         raise typer.BadParameter("--format must be one of md|html|json")
     if template not in {"analyst", "systematic", "brief"}:
         raise typer.BadParameter("--template must be one of analyst|systematic|brief")
-    db_path = runs_dir / run_id / "store.duckdb"
+    db_path = _safe_run_dir(runs_dir, run_id) / "store.duckdb"
     if not db_path.exists():
         raise typer.BadParameter(f"no store found at {db_path}")
     metrics = _inspect_payload(db_path=db_path, run_id=run_id)
@@ -1556,7 +1716,9 @@ def report(
 
 @runs_app.command("list")
 def runs_list(
-    runs_dir: Path = typer.Option(Path("runs"), "--runs-dir", help="Directory where run artifacts live."),
+    runs_dir: Path = typer.Option(
+        Path("runs"), "--runs-dir", help="Directory where run artifacts live."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit compact JSON."),
     limit: int = typer.Option(50, "--limit", help="Maximum rows."),
 ) -> None:
@@ -1571,16 +1733,14 @@ def runs_list(
 @runs_app.command("search")
 def runs_search(
     query: str = typer.Argument(..., help="Case-insensitive text to search."),
-    runs_dir: Path = typer.Option(Path("runs"), "--runs-dir", help="Directory where run artifacts live."),
+    runs_dir: Path = typer.Option(
+        Path("runs"), "--runs-dir", help="Directory where run artifacts live."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit compact JSON."),
 ) -> None:
     """Search run history by id, goal, spec, reason, or type."""
     q = query.lower()
-    rows = [
-        row
-        for row in _run_history_rows(runs_dir)
-        if q in json.dumps(row, default=str).lower()
-    ]
+    rows = [row for row in _run_history_rows(runs_dir) if q in json.dumps(row, default=str).lower()]
     if json_output:
         _json_echo({"runs": rows})
         return
@@ -1608,8 +1768,7 @@ def _export_entities(db_path: Path) -> list[dict[str, Any]]:
         )
         field_rows = _rows(
             con,
-            "SELECT entity_id, field_name, value_json, confidence FROM fields "
-            "ORDER BY field_name",
+            "SELECT entity_id, field_name, value_json, confidence FROM fields ORDER BY field_name",
         )
     finally:
         con.close()
@@ -1659,7 +1818,9 @@ def _entities_to_csv(entities: list[dict[str, Any]]) -> str:
         }
         for field in field_names:
             value = (entity.get("fields") or {}).get(field)
-            row[field] = json.dumps(value, default=str) if isinstance(value, (list, dict)) else value
+            row[field] = (
+                json.dumps(value, default=str) if isinstance(value, (list, dict)) else value
+            )
         writer.writerow(row)
     return out.getvalue()
 
@@ -1753,7 +1914,7 @@ def graph(
     """Run an ad-hoc SQL query against a completed run's entity_relations table."""
     import asyncio as _asyncio
 
-    db_path = runs_dir / run_id / "store.duckdb"
+    db_path = _safe_run_dir(runs_dir, run_id) / "store.duckdb"
     if not db_path.exists():
         raise typer.BadParameter(f"no store found at {db_path}")
 
@@ -1782,7 +1943,7 @@ def migrate(
     """List schema migrations recorded for a run (v1.2 audit trail)."""
     import asyncio as _asyncio
 
-    db_path = runs_dir / run_id / "store.duckdb"
+    db_path = _safe_run_dir(runs_dir, run_id) / "store.duckdb"
     if not db_path.exists():
         raise typer.BadParameter(f"no store found at {db_path}")
 

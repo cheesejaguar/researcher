@@ -24,8 +24,10 @@ class OfflineFixtureLLM(LLMClient):
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    def content_hash(self, messages: list[dict], tier: LLMTier) -> str:
-        blob = json.dumps({"tier": tier.value, "messages": messages}, sort_keys=True)
+    def content_hash(self, messages: list[dict], tier: LLMTier, model: str | None = None) -> str:
+        blob = json.dumps(
+            {"tier": tier.value, "model": model, "messages": messages}, sort_keys=True
+        )
         return hashlib.sha256(blob.encode()).hexdigest()
 
     async def complete(
@@ -35,8 +37,16 @@ class OfflineFixtureLLM(LLMClient):
         task_id: str,
         temperature: float = 0.2,
         max_tokens: int | None = None,
+        model: str | None = None,
     ) -> LLMResponse:
-        self.calls.append({"kind": "complete", "tier": tier.value, "task_id": task_id})
+        self.calls.append(
+            {
+                "kind": "complete",
+                "tier": tier.value,
+                "task_id": task_id,
+                "model": model,
+            }
+        )
         return LLMResponse(
             text="{}",
             usage=LLMUsage(tokens_in=0, tokens_out=0, cost_usd=0.0, model="offline"),
@@ -50,6 +60,7 @@ class OfflineFixtureLLM(LLMClient):
         task_id: str,
         temperature: float = 0.0,
         schema_retry: bool = True,
+        model: str | None = None,
     ) -> T:
         self.calls.append(
             {
@@ -57,6 +68,7 @@ class OfflineFixtureLLM(LLMClient):
                 "tier": tier.value,
                 "task_id": task_id,
                 "messages": messages,
+                "model": model,
             }
         )
         payload = self._payload_for_schema(messages, schema)
@@ -78,11 +90,49 @@ class OfflineFixtureLLM(LLMClient):
             return {"entities": ["World War I", "World War II"]}
 
         payload: dict[str, object] = {}
-        for field in fields:
+        field_sources: dict[str, str] = {}
+        for field, info in schema.model_fields.items():
             if field == "_placeholder":
                 continue
-            payload[field] = self._value_for_field(field, prompt)
+            if field == "field_sources":
+                payload[field] = field_sources
+                continue
+            value = self._value_for_field(field, prompt)
+            if value == "":
+                # Unknown schema fields still need a type-correct default so
+                # the response validates; metadata must never get an empty
+                # string where a dict/list is expected.
+                value = self._default_for_annotation(info.annotation)
+            payload[field] = value
+            if value not in (None, "", [], {}):
+                suffix = "glp1/step-1" if "ClinicalTrial" in prompt else "wars/world-war-ii"
+                field_sources[field] = f"https://offline.local/{suffix}"
         return payload
+
+    @staticmethod
+    def _default_for_annotation(annotation: object) -> object:
+        import types
+        import typing
+
+        origin = typing.get_origin(annotation)
+        if origin in (list, set, tuple):
+            return []
+        if origin is dict:
+            return {}
+        if origin in (typing.Union, types.UnionType):
+            members = [arg for arg in typing.get_args(annotation) if arg is not types.NoneType]
+            if len(members) == 1:
+                return OfflineFixtureLLM._default_for_annotation(members[0])
+            return None
+        if annotation is bool:
+            return False
+        if annotation is int:
+            return 0
+        if annotation is float:
+            return 0.0
+        if annotation is str:
+            return ""
+        return None
 
     @staticmethod
     def _value_for_field(field: str, prompt: str) -> object:

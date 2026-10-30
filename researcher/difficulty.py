@@ -95,9 +95,7 @@ class DifficultyGate:
             )
         except Exception:
             # Conservative fallback on any error: assume medium.
-            return DifficultyEstimate(
-                difficulty=3, reason="estimator_error", confidence=0.5
-            )
+            return DifficultyEstimate(difficulty=3, reason="estimator_error", confidence=0.5)
 
 
 class StubDifficultyGate:
@@ -120,9 +118,5 @@ class StubDifficultyGate:
     async def estimate(self, task: Task) -> DifficultyEstimate:
         query = task.seed_query or ""
         diff = self._overrides.get(query, self._default)
-        self.calls.append(
-            {"query": query, "difficulty": diff, "task_id": task.id}
-        )
-        return DifficultyEstimate(
-            difficulty=diff, reason=f"stub default={self._default}"
-        )
+        self.calls.append({"query": query, "difficulty": diff, "task_id": task.id})
+        return DifficultyEstimate(difficulty=diff, reason=f"stub default={self._default}")

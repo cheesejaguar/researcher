@@ -18,6 +18,7 @@ from researcher.models import LLMTier
 
 # ---------- Fakes ----------
 
+
 def _fake_openai_response(text: str, tokens_in: int = 11, tokens_out: int = 7) -> Any:
     msg = MagicMock()
     msg.content = text
@@ -60,6 +61,7 @@ def _fake_openai_cls(responses: list[Any]) -> type:
 
 # ---------- content_hash ----------
 
+
 def test_content_hash_deterministic():
     client_a = OpenRouterClient(api_key="sk-test")
     client_b = OpenRouterClient(api_key="sk-test")
@@ -79,6 +81,7 @@ def test_content_hash_differs_across_tiers():
 
 
 # ---------- complete ----------
+
 
 @pytest.mark.asyncio
 async def test_complete_returns_llm_response():
@@ -139,6 +142,7 @@ async def test_complete_hits_cache_on_second_call(tmp_path: Path):
 
 
 # ---------- complete_structured ----------
+
 
 class _SamplePayload(BaseModel):
     name: str
@@ -354,3 +358,46 @@ async def test_complete_cache_read_input_tokens_defaults_to_zero():
         task_id="t1",
     )
     assert out.usage.cache_read_input_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_complete_honors_explicit_model_override():
+    FakeCls = _fake_openai_cls([_fake_openai_response("ok", 1, 1)])
+    client = OpenRouterClient(api_key="sk-test", async_openai_cls=FakeCls)
+    resp = await client.complete(
+        [{"role": "user", "content": "q"}],
+        LLMTier.FAST,
+        task_id="t1",
+        model="council/model-x",
+    )
+    assert FakeCls.create_calls[0]["model"] == "council/model-x"
+    assert resp.usage.model == "council/model-x"
+
+
+@pytest.mark.asyncio
+async def test_complete_prefers_provider_reported_cost():
+    raw = _fake_openai_response("ok", 1000, 1000)
+    raw.usage.cost = 0.0042
+    FakeCls = _fake_openai_cls([raw])
+    client = OpenRouterClient(api_key="sk-test", async_openai_cls=FakeCls)
+    resp = await client.complete([{"role": "user", "content": "q"}], LLMTier.FAST, task_id="t1")
+    assert resp.usage.cost_usd == pytest.approx(0.0042)
+
+
+@pytest.mark.asyncio
+async def test_complete_uses_spec_pricing_overrides():
+    raw = _fake_openai_response("ok", 1_000_000, 0)
+    raw.usage.cost = None
+    FakeCls = _fake_openai_cls([raw])
+    client = OpenRouterClient(
+        api_key="sk-test",
+        async_openai_cls=FakeCls,
+        pricing={"custom/model": (2.0, 0.0)},
+    )
+    resp = await client.complete(
+        [{"role": "user", "content": "q"}],
+        LLMTier.FAST,
+        task_id="t1",
+        model="custom/model",
+    )
+    assert resp.usage.cost_usd == pytest.approx(2.0)

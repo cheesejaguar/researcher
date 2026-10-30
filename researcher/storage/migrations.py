@@ -73,9 +73,7 @@ def _field_names(entity_class: type[BaseModel]) -> set[str]:
     return set(entity_class.model_fields.keys())
 
 
-def diff_schemas(
-    old: type[BaseModel], new: type[BaseModel]
-) -> SchemaDiff:
+def diff_schemas(old: type[BaseModel], new: type[BaseModel]) -> SchemaDiff:
     """Return a :class:`SchemaDiff` comparing two Pydantic classes.
 
     Field names are taken from ``model_fields`` — we intentionally

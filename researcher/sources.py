@@ -36,7 +36,9 @@ def domain_for_url(url: str) -> str:
     return (parsed.netloc or "").lower()
 
 
-def domain_allowed(url: str, policy: SourcePolicy, legacy_allowlist: list[str] | None = None) -> bool:
+def domain_allowed(
+    url: str, policy: SourcePolicy, legacy_allowlist: list[str] | None = None
+) -> bool:
     domain = domain_for_url(url)
     if not domain:
         return True
@@ -86,7 +88,9 @@ def load_items(path: Path, item_column: str) -> list[dict[str, str]]:
     return rows
 
 
-def ingest_source_sets(source_sets: list[SourceSet]) -> tuple[list[SourceRecord], list[SourceChunk]]:
+def ingest_source_sets(
+    source_sets: list[SourceSet],
+) -> tuple[list[SourceRecord], list[SourceChunk]]:
     records: list[SourceRecord] = []
     chunks: list[SourceChunk] = []
     for source_set in source_sets:
@@ -201,9 +205,7 @@ class SourcePackSearchProvider:
             return results[:max_results]
         fallback = await self._fallback.search(query, max_results=max_results - len(results))
         filtered = [
-            r
-            for r in fallback
-            if domain_allowed(r.url, self._policy, self._legacy_allowlist)
+            r for r in fallback if domain_allowed(r.url, self._policy, self._legacy_allowlist)
         ]
         return (results + filtered)[:max_results]
 
@@ -224,17 +226,17 @@ class PolicySearchProvider:
 
     async def search(self, query: str, max_results: int = 10) -> list[SearchResult]:
         results = await self._fallback.search(query, max_results=max_results)
-        return [
-            r
-            for r in results
-            if domain_allowed(r.url, self._policy, self._legacy_allowlist)
-        ][:max_results]
+        return [r for r in results if domain_allowed(r.url, self._policy, self._legacy_allowlist)][
+            :max_results
+        ]
 
 
 def _chunks_for(source_id: str, text: str) -> list[SourceChunk]:
     chunks = chunk_text(text, max_chars=2500)
     if not chunks and text.strip():
-        return [SourceChunk(chunk_id=f"{source_id}:0", source_id=source_id, ordinal=0, text=text[:2500])]
+        return [
+            SourceChunk(chunk_id=f"{source_id}:0", source_id=source_id, ordinal=0, text=text[:2500])
+        ]
     return [
         SourceChunk(
             chunk_id=f"{source_id}:{idx}",

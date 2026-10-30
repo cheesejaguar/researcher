@@ -79,9 +79,7 @@ class BudgetWarningPayload(BaseModel):
 
 
 class RunCompletePayload(BaseModel):
-    reason: Literal[
-        "budget", "plateau", "ctrl_c", "error", "deadline", "no_tasks", "subagent_cap"
-    ]
+    reason: Literal["budget", "plateau", "ctrl_c", "error", "deadline", "no_tasks", "subagent_cap"]
     entities: int
     cost_usd: float
     wall_s: float
@@ -236,7 +234,23 @@ class VerificationVote(_EventBase):
 
 
 Event = Annotated[
-    CycleStart | CycleEnd | AgentSpawn | AgentStateChange | AgentLog | FactWritten | ConflictDetected | ConflictResolved | CostUpdate | BudgetWarning | RunComplete | SubagentCall | InterruptRequested | InterruptResolved | CoverageReport | SourcePackLoaded | VerificationVote,
+    CycleStart
+    | CycleEnd
+    | AgentSpawn
+    | AgentStateChange
+    | AgentLog
+    | FactWritten
+    | ConflictDetected
+    | ConflictResolved
+    | CostUpdate
+    | BudgetWarning
+    | RunComplete
+    | SubagentCall
+    | InterruptRequested
+    | InterruptResolved
+    | CoverageReport
+    | SourcePackLoaded
+    | VerificationVote,
     Field(discriminator="type"),
 ]
 
@@ -248,7 +262,7 @@ class _EventEnvelope(BaseModel):
 
 def parse_event(data: dict) -> Event:
     """Parse a raw dict into the correct Event subclass by discriminator."""
-    return _EventEnvelope(event=data).event
+    return _EventEnvelope.model_validate({"event": data}).event
 
 
 # ---------- EventBus ----------
@@ -274,7 +288,7 @@ class EventBus:
         self._queue: asyncio.Queue[Event] = asyncio.Queue(maxsize=max_queue)
         self._seq = 0
         self._dropped = 0
-        self._file = None  # type: ignore[assignment]
+        self._file: Any = None
         self._started = False
         # v1.3 #4: synchronous sideband subscribers (e.g. OTEL adapter). Each
         # callback receives the emitted event AFTER the JSONL write and the

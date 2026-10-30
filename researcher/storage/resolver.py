@@ -99,9 +99,7 @@ class DefaultEntityResolver(EntityResolver):
             if ent is None:
                 continue
             candidate_name_cell = ent.fields.get("name")
-            candidate_name = (
-                candidate_name_cell.value if candidate_name_cell else candidate_id
-            )
+            candidate_name = candidate_name_cell.value if candidate_name_cell else candidate_id
             if frozenset({name, str(candidate_name)}) in self._blocked_names:
                 continue
             filtered.append((candidate_id, sim))
@@ -133,7 +131,9 @@ class DefaultEntityResolver(EntityResolver):
         # future resolutions can find this entity via find_similar (which
         # joins embeddings against entities by type).
         new_id = await self._store.upsert_entity(entity_type, name, {})
-        self._store.set_vector(new_id, embedding)
+        set_vector = getattr(self._store, "set_vector", None)
+        if callable(set_vector):
+            set_vector(new_id, embedding)
         return ResolveResult(
             decision=ResolveDecision.DISTINCT,
             entity_id=new_id,

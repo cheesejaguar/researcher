@@ -177,9 +177,7 @@ async def test_critic_does_not_receive_verifier_output_in_prompt(tmp_path):
         "the answer was",
     )
     for msg_list in captured_messages:
-        text = " ".join(
-            str(m.get("content", "")) for m in msg_list
-        ).lower()
+        text = " ".join(str(m.get("content", "")) for m in msg_list).lower()
         for f in forbidden:
             assert f not in text, f"critic prompt contains forbidden phrase: {f!r}"
 

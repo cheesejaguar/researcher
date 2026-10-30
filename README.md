@@ -8,7 +8,7 @@
 [![Ink](https://img.shields.io/badge/tui-ink%205-blueviolet?logo=react&logoColor=white)](https://github.com/vadimdemedes/ink)
 [![DuckDB](https://img.shields.io/badge/store-duckdb-FFF000?logo=duckdb&logoColor=black)](https://duckdb.org)
 [![Pydantic](https://img.shields.io/badge/pydantic-v2-E92063?logo=pydantic&logoColor=white)](https://docs.pydantic.dev)
-[![Tests](https://img.shields.io/badge/tests-533%20passing-brightgreen.svg)](#-status)
+[![Tests](https://img.shields.io/badge/tests-589%20passing-brightgreen.svg)](#-status)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Code style: ruff](https://img.shields.io/badge/lint-ruff-D7FF64?logo=ruff&logoColor=black)](https://github.com/astral-sh/ruff)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/cheesejaguar/researcher/pulls)
@@ -306,7 +306,7 @@ researcher/
 │   ├── 2026-04-08-obsidian-integration-design.md
 │   ├── 2026-04-08-obsidian-integration-plan.md
 │   └── 2026-04-28-current-product-surface.md
-└── 🧪 tests/                        # 533 Python tests + 17 TUI tests as of 2026-04-28
+└── 🧪 tests/                        # 589 Python tests + 17 TUI tests as of 2026-10-30
     ├── unit/
     ├── integration/
     └── stubs/                      # deterministic test doubles
@@ -455,7 +455,7 @@ RESEARCHER_RUN_MANUAL=1 uv run pytest tests/manual/ -v
 - ✅ `doctor`, `inspect`, `accept`, `export`, `evidence`, `report`, `stop`, and `resume` CLI surfaces
 - ✅ Source packs, source policy, citation evidence, cited reports, run history, optional council verification, and wide/batch item mode
 - ✅ Fetch / search / extract stack (httpx / Tavily / Brave / Serper / trafilatura)
-- ✅ Python and TypeScript test suites, ruff clean (`533 passed, 1 skipped`; TUI `17 passed` as of 2026-04-28)
+- ✅ CI-gated Python and TypeScript suites, ruff + mypy clean (`589 passed, 1 skipped`; TUI `17 passed` as of 2026-10-30)
 - ✅ 2 example specs: `wars.yaml`, `glp1_trials.yaml`
 
 ### Wave 2 next up 🚧
