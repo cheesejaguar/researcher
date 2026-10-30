@@ -24,6 +24,7 @@ class TaskKind(str, Enum):
     EXPAND = "expand"  # fill fields for a known entity
     VERIFY = "verify"  # resolve conflicts
     ENRICH = "enrich"  # follow relations
+    CRITIC = "critic"  # optional trajectory critique / skill suggestion
 
 
 class LLMTier(str, Enum):

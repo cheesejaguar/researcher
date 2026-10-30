@@ -31,7 +31,7 @@ from typing import Any, Awaitable, Callable, Optional
 from uuid import uuid4
 
 from researcher.models import FactClaim
-from researcher.storage.resolver import EntityResolver
+from researcher.storage.resolver import EntityResolver, ResolveDecision
 from researcher.storage.store import Conflict, FieldCell, KnowledgeStore
 
 
@@ -65,9 +65,7 @@ async def validate_type(claim: FactClaim, entity_schema: dict) -> FactClaim:
     try:
         coerced = _coerce_value(claim.value, type_str)
     except (ValueError, TypeError) as exc:
-        raise ValueError(
-            f"type_error: field={claim.field} type={type_str}: {exc}"
-        ) from exc
+        raise ValueError(f"type_error: field={claim.field} type={type_str}: {exc}") from exc
     return claim.model_copy(update={"value": coerced})
 
 
@@ -136,9 +134,7 @@ async def dedup(claim: FactClaim, store: KnowledgeStore) -> bool:
     return False
 
 
-async def detect_conflict(
-    claim: FactClaim, store: KnowledgeStore
-) -> list[FieldCell]:
+async def detect_conflict(claim: FactClaim, store: KnowledgeStore) -> list[FieldCell]:
     """Return existing :class:`FieldCell` rows that contradict ``claim``.
 
     Looks up the entity by ``(entity_type, entity_name)`` via the store's
@@ -224,7 +220,17 @@ class FactWriter:
             "conflicts": 0,
             "type_errors": 0,
             "drops_queue_full": 0,
+            # Entity-resolution accounting. AUTO_MERGE claims are canonicalized
+            # to the existing entity's name; PENDING claims stay separate but
+            # are counted so operators can review them.
+            "auto_merges": 0,
+            "pending_resolutions": 0,
+            "distinct_resolutions": 0,
+            "resolution_errors": 0,
         }
+        # (entity_type, submitted_name) -> canonical name. Avoids re-embedding
+        # the same name on every claim from every source.
+        self._resolution_cache: dict[tuple[str, str], str] = {}
 
     # ---------- Public API ----------
 
@@ -289,16 +295,19 @@ class FactWriter:
             claim = await validate_type(claim, self._schema)
         except Exception:
             self._metrics["type_errors"] += 1
-            return WriteOutcome(
-                written=False, entity_id=None, reason="type_error"
-            )
+            return WriteOutcome(written=False, entity_id=None, reason="type_error")
 
         # 2. dedup (no-op in v1-B; store.upsert_entity handles same-name merge)
         if await dedup(claim, self._store):
             self._metrics["duplicates"] += 1
-            return WriteOutcome(
-                written=False, entity_id=None, reason="duplicate"
-            )
+            return WriteOutcome(written=False, entity_id=None, reason="duplicate")
+
+        # 2b. entity resolution. AUTO_MERGE rewrites the claim to the existing
+        # canonical name so every downstream lookup (conflict detection,
+        # upsert, merge_field) lands on the same row. PENDING deliberately
+        # stays separate; DISTINCT is already a new store row created by the
+        # resolver.
+        claim = await self._resolve_claim(claim)
 
         # Cross-run merge path: skip the legacy detect_conflict / upsert flow
         # and use store.merge_field, which carries first/last_seen_run +
@@ -320,6 +329,61 @@ class FactWriter:
 
         # 5. persist provenance + field cell
         return await self._persist(claim)
+
+    async def _resolve_claim(self, claim: FactClaim) -> FactClaim:
+        """Canonicalize the claim's entity name through the resolver.
+
+        The resolver is best-effort: a failing backend must never block fact
+        persistence. ``entity_id_hint`` short-circuits resolution because the
+        producing agent already identified the target row.
+        """
+        if claim.entity_id_hint:
+            try:
+                entity = await self._store.get_entity(claim.entity_id_hint)
+            except Exception:
+                entity = None
+            if entity is not None:
+                name_cell = entity.fields.get("name")
+                canonical = str(name_cell.value) if name_cell else claim.entity_name
+                if canonical != claim.entity_name:
+                    self._metrics["auto_merges"] += 1
+                return claim.model_copy(update={"entity_name": canonical})
+
+        key = (claim.entity_type, claim.entity_name)
+        cached = self._resolution_cache.get(key)
+        if cached is not None:
+            return claim.model_copy(update={"entity_name": cached})
+
+        try:
+            result = await self._resolver.resolve(claim.entity_type, claim.entity_name)
+        except Exception:
+            self._metrics["resolution_errors"] += 1
+            return claim
+
+        if result.decision is ResolveDecision.AUTO_MERGE:
+            canonical = claim.entity_name
+            try:
+                entity = await self._store.get_entity(result.entity_id)
+            except Exception:
+                entity = None
+            if entity is not None:
+                name_cell = entity.fields.get("name")
+                if name_cell is not None:
+                    canonical = str(name_cell.value)
+            self._metrics["auto_merges"] += 1
+            self._resolution_cache[key] = canonical
+            return claim.model_copy(update={"entity_name": canonical})
+
+        if result.decision is ResolveDecision.PENDING:
+            # Keep the provisional name so the claim does not silently merge
+            # into a merely-similar entity. A later verify pass can promote it.
+            self._metrics["pending_resolutions"] += 1
+            self._resolution_cache[key] = claim.entity_name
+            return claim
+
+        self._metrics["distinct_resolutions"] += 1
+        self._resolution_cache[key] = claim.entity_name
+        return claim
 
     async def _persist_merge(self, claim: FactClaim) -> WriteOutcome:
         """Cross-run merge persist path. Resolves the entity by name,
@@ -352,16 +416,12 @@ class FactWriter:
                 )
             except Exception:
                 self._metrics["type_errors"] += 1
-                return WriteOutcome(
-                    written=False, entity_id=None, reason="store_error"
-                )
+                return WriteOutcome(written=False, entity_id=None, reason="store_error")
 
         # Record provenance (best-effort; matches the overwrite path).
         prov_id = uuid4().hex
         try:
-            await self._store.record_provenance(
-                prov_id, claim.provenance.model_dump(mode="json")
-            )
+            await self._store.record_provenance(prov_id, claim.provenance.model_dump(mode="json"))
         except Exception:
             pass
 
@@ -376,9 +436,7 @@ class FactWriter:
             )
         except Exception:
             self._metrics["type_errors"] += 1
-            return WriteOutcome(
-                written=False, entity_id=entity_id, reason="store_error"
-            )
+            return WriteOutcome(written=False, entity_id=entity_id, reason="store_error")
 
         status = merge_result.get("status", "")
         self._metrics["written"] += 1
@@ -390,17 +448,13 @@ class FactWriter:
         except Exception:
             pass
 
-        return WriteOutcome(
-            written=True, entity_id=entity_id, reason=status or "ok"
-        )
+        return WriteOutcome(written=True, entity_id=entity_id, reason=status or "ok")
 
     async def _persist(self, claim: FactClaim) -> WriteOutcome:
         """Record provenance, upsert the entity field, and emit fact_written."""
         prov_id = uuid4().hex
         try:
-            await self._store.record_provenance(
-                prov_id, claim.provenance.model_dump(mode="json")
-            )
+            await self._store.record_provenance(prov_id, claim.provenance.model_dump(mode="json"))
         except Exception:
             # Best-effort: provenance write failure shouldn't sink the field
             # write — but the field cell will still link to prov_id, so the
@@ -425,9 +479,7 @@ class FactWriter:
             # the type_errors counter for now (Wave 1-C will add a dedicated
             # store_errors counter once we wire structured errors).
             self._metrics["type_errors"] += 1
-            return WriteOutcome(
-                written=False, entity_id=None, reason="store_error"
-            )
+            return WriteOutcome(written=False, entity_id=None, reason="store_error")
 
         self._metrics["written"] += 1
         try:

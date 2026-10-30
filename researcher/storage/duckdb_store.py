@@ -346,9 +346,7 @@ class DuckDBKnowledgeStore(KnowledgeStore):
 
     # ---- schema registration --------------------------------------------
 
-    async def init_schema(
-        self, entity_class: type[BaseModel], force: bool = False
-    ) -> None:
+    async def init_schema(self, entity_class: type[BaseModel], force: bool = False) -> None:
         """Register an entity class's schema with migration audit trail.
 
         v1.2 behavior:
@@ -457,9 +455,7 @@ class DuckDBKnowledgeStore(KnowledgeStore):
 
     # ---- entities --------------------------------------------------------
 
-    async def upsert_entity(
-        self, entity_type: str, name: str, fields: dict[str, FieldCell]
-    ) -> str:
+    async def upsert_entity(self, entity_type: str, name: str, fields: dict[str, FieldCell]) -> str:
         async with self._lock:
             conn = self._require_conn()
             now = _now()
@@ -713,9 +709,7 @@ class DuckDBKnowledgeStore(KnowledgeStore):
                     ],
                 )
 
-    async def find_neighbors(
-        self, entity_id: str, relation_label: str | None = None
-    ) -> list[dict]:
+    async def find_neighbors(self, entity_id: str, relation_label: str | None = None) -> list[dict]:
         """Return outbound neighbors of an entity.
 
         Optionally filtered by ``relation_label``. Returns a list of dicts
@@ -782,8 +776,7 @@ class DuckDBKnowledgeStore(KnowledgeStore):
         # DELETE + INSERT for upsert (DuckDB has no INSERT OR REPLACE).
         conn.execute("DELETE FROM embeddings WHERE entity_id = ?", [entity_id])
         conn.execute(
-            "INSERT INTO embeddings (entity_id, vector_json, vector_array) "
-            "VALUES (?, ?, ?)",
+            "INSERT INTO embeddings (entity_id, vector_json, vector_array) VALUES (?, ?, ?)",
             [entity_id, json_blob, padded],
         )
 
@@ -847,9 +840,7 @@ class DuckDBKnowledgeStore(KnowledgeStore):
     async def record_provenance(self, provenance_id: str, data: dict) -> None:
         async with self._lock:
             conn = self._require_conn()
-            conn.execute(
-                "DELETE FROM provenance WHERE provenance_id = ?", [provenance_id]
-            )
+            conn.execute("DELETE FROM provenance WHERE provenance_id = ?", [provenance_id])
             conn.execute(
                 "INSERT INTO provenance VALUES (?, ?)",
                 [provenance_id, json.dumps(data)],
@@ -930,12 +921,8 @@ class DuckDBKnowledgeStore(KnowledgeStore):
 
             conflicts: list[Conflict] = []
             for cid, ent_id, field, st, cand_json, win_json, reason in rows:
-                candidates = [
-                    FieldCell.model_validate(c) for c in json.loads(cand_json)
-                ]
-                winning_value: Any = (
-                    json.loads(win_json) if win_json is not None else None
-                )
+                candidates = [FieldCell.model_validate(c) for c in json.loads(cand_json)]
+                winning_value: Any = json.loads(win_json) if win_json is not None else None
                 conflicts.append(
                     Conflict(
                         conflict_id=cid,
@@ -952,17 +939,11 @@ class DuckDBKnowledgeStore(KnowledgeStore):
     async def record_conflict(self, conflict: Conflict) -> None:
         async with self._lock:
             conn = self._require_conn()
-            cand_json = json.dumps(
-                [json.loads(c.model_dump_json()) for c in conflict.candidates]
-            )
+            cand_json = json.dumps([json.loads(c.model_dump_json()) for c in conflict.candidates])
             win_json = (
-                json.dumps(conflict.winning_value)
-                if conflict.winning_value is not None
-                else None
+                json.dumps(conflict.winning_value) if conflict.winning_value is not None else None
             )
-            conn.execute(
-                "DELETE FROM conflicts WHERE conflict_id = ?", [conflict.conflict_id]
-            )
+            conn.execute("DELETE FROM conflicts WHERE conflict_id = ?", [conflict.conflict_id])
             conn.execute(
                 "INSERT INTO conflicts VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
@@ -978,9 +959,7 @@ class DuckDBKnowledgeStore(KnowledgeStore):
 
     # ---- metrics + run summaries ----------------------------------------
 
-    async def snapshot_coverage(
-        self, confidence_threshold: float = 0.5
-    ) -> CoverageSnapshot:
+    async def snapshot_coverage(self, confidence_threshold: float = 0.5) -> CoverageSnapshot:
         """Coverage signals only the store can answer (v1.2 #8).
 
         Returns the per-field count of cells whose confidence is below
@@ -1041,9 +1020,7 @@ class DuckDBKnowledgeStore(KnowledgeStore):
         async with self._lock:
             conn = self._require_conn()
 
-            entities_total = conn.execute(
-                "SELECT COUNT(*) FROM entities"
-            ).fetchone()[0]
+            entities_total = (conn.execute("SELECT COUNT(*) FROM entities").fetchone() or (0,))[0]
 
             by_type_rows = conn.execute(
                 "SELECT entity_type, COUNT(*) FROM entities GROUP BY entity_type"
@@ -1052,21 +1029,23 @@ class DuckDBKnowledgeStore(KnowledgeStore):
 
             # Field-fill: cells whose JSON-decoded value is non-null divided
             # by total cells across all entities. Mirrors StubKnowledgeStore.
-            total_cells = conn.execute(
-                "SELECT COUNT(*) FROM fields"
-            ).fetchone()[0]
+            total_cells = (conn.execute("SELECT COUNT(*) FROM fields").fetchone() or (0,))[0]
             if total_cells:
                 # value_json == 'null' means the python value was None.
-                filled = conn.execute(
-                    "SELECT COUNT(*) FROM fields WHERE value_json != 'null'"
-                ).fetchone()[0]
+                filled = (
+                    conn.execute(
+                        "SELECT COUNT(*) FROM fields WHERE value_json != 'null'"
+                    ).fetchone()
+                    or (0,)
+                )[0]
                 fields_filled_pct = float(filled) / float(total_cells)
             else:
                 fields_filled_pct = 0.0
 
-            conflicts_open = conn.execute(
-                "SELECT COUNT(*) FROM conflicts WHERE status = 'open'"
-            ).fetchone()[0]
+            conflicts_open = (
+                conn.execute("SELECT COUNT(*) FROM conflicts WHERE status = 'open'").fetchone()
+                or (0,)
+            )[0]
 
             cost_usd_total = 0.0
             if self._cost_tracker is not None:
@@ -1093,9 +1072,7 @@ class DuckDBKnowledgeStore(KnowledgeStore):
 
     # ---- run checkpoints (crash-safe resume) ----------------------------
 
-    async def save_checkpoint(
-        self, run_id: str, cycle: int, data: dict
-    ) -> None:
+    async def save_checkpoint(self, run_id: str, cycle: int, data: dict) -> None:
         """Persist (or overwrite) a per-run checkpoint blob.
 
         The checkpoint stores the orchestrator's small control state (the
@@ -1107,12 +1084,9 @@ class DuckDBKnowledgeStore(KnowledgeStore):
             conn = self._require_conn()
             blob = json.dumps(data)
             # Upsert: DELETE then INSERT (DuckDB has no INSERT OR REPLACE).
+            conn.execute("DELETE FROM run_checkpoints WHERE run_id = ?", [run_id])
             conn.execute(
-                "DELETE FROM run_checkpoints WHERE run_id = ?", [run_id]
-            )
-            conn.execute(
-                "INSERT INTO run_checkpoints (run_id, cycle, data_json) "
-                "VALUES (?, ?, ?)",
+                "INSERT INTO run_checkpoints (run_id, cycle, data_json) VALUES (?, ?, ?)",
                 [run_id, int(cycle), blob],
             )
 

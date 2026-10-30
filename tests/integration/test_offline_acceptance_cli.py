@@ -100,7 +100,5 @@ def test_wars_spec_offline_acceptance(tmp_path: Path) -> None:
 
 
 def test_glp1_spec_offline_acceptance(tmp_path: Path) -> None:
-    inspected = _run_and_accept(
-        "specs/glp1_trials.yaml", "glp1-offline", tmp_path
-    )
+    inspected = _run_and_accept("specs/glp1_trials.yaml", "glp1-offline", tmp_path)
     assert "ClinicalTrial" in inspected["entities_by_type"]

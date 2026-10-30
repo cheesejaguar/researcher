@@ -128,7 +128,9 @@ async def test_circuit_break_clears_detected_after_three_failures():
     assert orch._resolver_pick(_sample_task()).kind == CliKind.CLAUDE_CODE
     orch._record_subagent_failure("spawn_failed: ENOENT")
     orch._record_subagent_failure("timeout")
-    assert orch._resolver_pick(_sample_task()).kind == CliKind.CLAUDE_CODE  # 2 failures, not tripped
+    assert (
+        orch._resolver_pick(_sample_task()).kind == CliKind.CLAUDE_CODE
+    )  # 2 failures, not tripped
     orch._record_subagent_failure("exit 1: oops")
     # Third failure should trip the break.
     assert orch._resolver_pick(_sample_task()).kind is None

@@ -122,8 +122,7 @@ async def test_init_schema_records_additive_migration(tmp_path):
         await store.init_schema(WarV1)
         await store.init_schema(WarV2)  # add end_year
         rows = await store.query(
-            "SELECT entity_class_name, migration_type "
-            "FROM schema_migrations ORDER BY applied_at"
+            "SELECT entity_class_name, migration_type FROM schema_migrations ORDER BY applied_at"
         )
         assert len(rows) == 2
         assert rows[0]["migration_type"] == "initial"
@@ -153,9 +152,7 @@ async def test_init_schema_breaking_change_can_be_forced(tmp_path):
         await store.init_schema(WarV1)
         # force=True bypasses the breaking-change check.
         await store.init_schema(WarV3, force=True)
-        rows = await store.query(
-            "SELECT migration_type FROM schema_migrations ORDER BY applied_at"
-        )
+        rows = await store.query("SELECT migration_type FROM schema_migrations ORDER BY applied_at")
         assert len(rows) == 2
         assert rows[1]["migration_type"] == "breaking_forced"
     finally:

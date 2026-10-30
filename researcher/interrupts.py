@@ -19,23 +19,17 @@ class InterruptDecision(str, Enum):
 
 
 class InterruptHandler(Protocol):
-    async def handle(
-        self, point: str, context: dict[str, Any]
-    ) -> InterruptDecision: ...
+    async def handle(self, point: str, context: dict[str, Any]) -> InterruptDecision: ...
 
 
 class StubInterruptHandler:
     """Always returns the configured default. Records every call for assertions."""
 
-    def __init__(
-        self, default_decision: InterruptDecision = InterruptDecision.CONTINUE
-    ) -> None:
+    def __init__(self, default_decision: InterruptDecision = InterruptDecision.CONTINUE) -> None:
         self._default = default_decision
         self.calls: list[dict[str, Any]] = []
 
-    async def handle(
-        self, point: str, context: dict[str, Any]
-    ) -> InterruptDecision:
+    async def handle(self, point: str, context: dict[str, Any]) -> InterruptDecision:
         self.calls.append({"point": point, "context": dict(context)})
         return self._default
 
@@ -46,16 +40,11 @@ class StdinInterruptHandler:
     def __init__(self, prompt_fn: Callable[[str], str] | None = None) -> None:
         self._prompt_fn = prompt_fn
 
-    async def handle(
-        self, point: str, context: dict[str, Any]
-    ) -> InterruptDecision:
+    async def handle(self, point: str, context: dict[str, Any]) -> InterruptDecision:
         # Render a brief summary of the context, then ask the user.
         summary_lines = [f"  - {k}: {v}" for k, v in context.items()]
         summary = "\n".join(summary_lines) if summary_lines else "  (no context)"
-        prompt = (
-            f"\n[interrupt @ {point}]\n{summary}\n"
-            f"Continue? [Y/n] "
-        )
+        prompt = f"\n[interrupt @ {point}]\n{summary}\nContinue? [Y/n] "
         if self._prompt_fn is not None:
             response = self._prompt_fn(prompt)
         else:

@@ -86,8 +86,12 @@ def _make_llm_returning(entities: list[str]) -> Any:
 @pytest.mark.asyncio
 async def test_discover_happy_path_emits_claims() -> None:
     search_results = [
-        SearchResult(title="WW2", url="https://en.wikipedia.org/wiki/World_War_II", snippet="", rank=0),
-        SearchResult(title="WW1", url="https://en.wikipedia.org/wiki/World_War_I", snippet="", rank=1),
+        SearchResult(
+            title="WW2", url="https://en.wikipedia.org/wiki/World_War_II", snippet="", rank=0
+        ),
+        SearchResult(
+            title="WW1", url="https://en.wikipedia.org/wiki/World_War_I", snippet="", rank=1
+        ),
     ]
     deps = _make_deps(search_results)
     llm = _make_llm_returning(["World War II", "World War I"])
@@ -149,7 +153,14 @@ async def test_discover_skips_failed_fetches() -> None:
         SearchResult(title="WW1", url="https://example.com/b", snippet="", rank=1),
     ]
     fetch_results = [
-        FetchResult(url="https://example.com/a", status=500, content="", headers={}, ok=False, error="http 500"),
+        FetchResult(
+            url="https://example.com/a",
+            status=500,
+            content="",
+            headers={},
+            ok=False,
+            error="http 500",
+        ),
         FetchResult(
             url="https://example.com/b",
             status=200,
@@ -240,9 +251,50 @@ async def test_discover_prompt_includes_matching_skill_guidance() -> None:
     await agent.run(_sample_task())
 
     assert llm.calls
-    user_messages = [
-        m["content"]
-        for m in llm.calls[0]["messages"]
-        if m.get("role") == "user"
-    ]
+    user_messages = [m["content"] for m in llm.calls[0]["messages"] if m.get("role") == "user"]
     assert any("Wikipedia infobox" in msg for msg in user_messages)
+
+
+@pytest.mark.asyncio
+async def test_discover_uses_per_entity_source_provenance() -> None:
+    url_2 = "https://example.com/world-war-ii"
+    url_1 = "https://example.com/world-war-i"
+    search_results = [
+        SearchResult(title="WW2", url=url_2, snippet="", rank=0),
+        SearchResult(title="WW1", url=url_1, snippet="", rank=1),
+    ]
+    deps = _make_deps(
+        search_results,
+        fetch_results=[
+            FetchResult(url=url_2, status=200, content="<p>WW2 body</p>", headers={}, ok=True),
+            FetchResult(url=url_1, status=200, content="<p>WW1 body</p>", headers={}, ok=True),
+        ],
+    )
+    llm = StubLLMClient()
+
+    async def fake_structured(
+        messages, schema, tier, task_id, temperature=0.0, schema_retry=True, model=None
+    ):
+        return schema(
+            entities=["World War II", "World War I"],
+            entity_sources={"World War II": url_2, "World War I": url_1},
+        )
+
+    llm.complete_structured = fake_structured  # type: ignore[method-assign]
+    agent = DiscoverAgent(
+        agent_id="native-abc",
+        llm=llm,
+        store=StubKnowledgeStore(),
+        emit=StubEventBus().emit,
+        run_id="run-x",
+        deps=deps,
+        entity_schema=_entity_schema(),
+        goal="Wars",
+    )
+
+    result = await agent.run(_sample_task())
+
+    provenance = {c.entity_name: c.provenance for c in result.claims}
+    assert provenance["World War II"].url == url_2
+    assert provenance["World War I"].url == url_1
+    assert "WW2 body" in provenance["World War II"].snippet

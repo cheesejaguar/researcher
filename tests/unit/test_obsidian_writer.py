@@ -313,17 +313,11 @@ async def test_on_fact_dedupes_provenance_by_url_and_span(tmp_path: Path):
     writer = ObsidianWriter(vault_path=tmp_path)
     await writer.start()
     try:
-        await writer.on_fact(
-            _sample_claim(url="https://a.com", span="cli_0"), run_id="run-1"
-        )
-        await writer.on_fact(
-            _sample_claim(url="https://a.com", span="cli_0"), run_id="run-1"
-        )
+        await writer.on_fact(_sample_claim(url="https://a.com", span="cli_0"), run_id="run-1")
+        await writer.on_fact(_sample_claim(url="https://a.com", span="cli_0"), run_id="run-1")
         fv = writer._pending[("War", "World War II")].fields["start_year"]
         assert len(fv.provenances) == 1
-        await writer.on_fact(
-            _sample_claim(url="https://a.com", span="cli_1"), run_id="run-1"
-        )
+        await writer.on_fact(_sample_claim(url="https://a.com", span="cli_1"), run_id="run-1")
         assert len(fv.provenances) == 2
     finally:
         await writer.stop()
@@ -445,9 +439,7 @@ async def test_organizes_by_entity_type_subfolder(tmp_path: Path):
     writer = ObsidianWriter(vault_path=tmp_path)
     await writer.start()
     try:
-        await writer.on_fact(
-            _sample_claim(entity_type="War", entity_name="WWII"), run_id="run-1"
-        )
+        await writer.on_fact(_sample_claim(entity_type="War", entity_name="WWII"), run_id="run-1")
         await writer.on_fact(
             _sample_claim(
                 entity_type="Trial",
@@ -565,7 +557,9 @@ async def test_render_emits_dataview_inline_fields(tmp_path: Path):
     await writer.start()
     try:
         await writer.on_fact(_sample_claim(field_name="start_year", value=1939), run_id="r1")
-        await writer.on_fact(_sample_claim(field_name="end_year", value=1945, span="cli_1"), run_id="r1")
+        await writer.on_fact(
+            _sample_claim(field_name="end_year", value=1945, span="cli_1"), run_id="r1"
+        )
         await writer.flush()
     finally:
         await writer.stop()
@@ -639,7 +633,9 @@ async def test_inject_wikilinks_wraps_known_entity_names(tmp_path: Path):
             run_id="r1",
         )
         await writer.on_fact(
-            _sample_claim(entity_type="War", entity_name="World War I", field_name="start_year", value=1914),
+            _sample_claim(
+                entity_type="War", entity_name="World War I", field_name="start_year", value=1914
+            ),
             run_id="r1",
         )
         await writer.flush()

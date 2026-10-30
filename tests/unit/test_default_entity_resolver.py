@@ -28,14 +28,18 @@ async def _hash_embed(texts: list[str]) -> list[list[float]]:
 
 async def _canned_embed_factory(vectors: dict[str, list[float]]):
     """Returns an embed_fn that looks up names in a canned dict."""
+
     async def embed(texts: list[str]) -> list[list[float]]:
         return [vectors[t] for t in texts]
+
     return embed
 
 
 def _cell(v) -> FieldCell:
     return FieldCell(
-        value=v, confidence=0.9, provenance_ids=[],
+        value=v,
+        confidence=0.9,
+        provenance_ids=[],
         updated_at=datetime.now(UTC),
     )
 
@@ -70,7 +74,10 @@ async def test_resolve_auto_merge_on_high_similarity(tmp_path: Path):
         store.set_vector(eid_a, vec_a)
 
         resolver = DefaultEntityResolver(
-            store=store, embed_fn=canned, high_thresh=0.9, low_thresh=0.5,
+            store=store,
+            embed_fn=canned,
+            high_thresh=0.9,
+            low_thresh=0.5,
         )
         # B is very similar to A → should AUTO_MERGE with eid_a
         result = await resolver.resolve("War", "B")
@@ -97,7 +104,10 @@ async def test_resolve_pending_in_medium_band(tmp_path: Path):
         store.set_vector(eid_a, vec_a)
 
         resolver = DefaultEntityResolver(
-            store=store, embed_fn=canned, high_thresh=0.92, low_thresh=0.78,
+            store=store,
+            embed_fn=canned,
+            high_thresh=0.92,
+            low_thresh=0.78,
         )
         result = await resolver.resolve("War", "B")
         assert result.decision == ResolveDecision.PENDING
@@ -122,7 +132,10 @@ async def test_resolve_distinct_below_low_thresh(tmp_path: Path):
         store.set_vector(eid_a, vec_a)
 
         resolver = DefaultEntityResolver(
-            store=store, embed_fn=canned, high_thresh=0.92, low_thresh=0.78,
+            store=store,
+            embed_fn=canned,
+            high_thresh=0.92,
+            low_thresh=0.78,
         )
         result = await resolver.resolve("War", "B")
         assert result.decision == ResolveDecision.DISTINCT
@@ -144,7 +157,9 @@ async def test_resolve_respects_distinct_pairs_blocklist(tmp_path: Path):
         async def canned(texts):
             return [vectors[t] for t in texts]
 
-        eid_a = await store.upsert_entity("War", "Napoleonic Wars", {"name": _cell("Napoleonic Wars")})
+        eid_a = await store.upsert_entity(
+            "War", "Napoleonic Wars", {"name": _cell("Napoleonic Wars")}
+        )
         store.set_vector(eid_a, vec_a)
 
         resolver = DefaultEntityResolver(
@@ -197,18 +212,21 @@ async def test_wwii_synonyms_resolve_together_with_real_hash_embedder(tmp_path: 
         # Use canned vectors to simulate what a real embedder would produce:
         # the four WWII variants cluster together; Cold War is far.
         vectors = {
-            "WWII":            [1.0, 0.0, 0.0, 0.0],
-            "World War II":    [0.98, 0.1, 0.0, 0.0],
-            "WW2":             [0.97, 0.0, 0.1, 0.0],
-            "World War 2":     [0.99, 0.05, 0.05, 0.0],
-            "Cold War":        [0.0, 0.0, 0.0, 1.0],
+            "WWII": [1.0, 0.0, 0.0, 0.0],
+            "World War II": [0.98, 0.1, 0.0, 0.0],
+            "WW2": [0.97, 0.0, 0.1, 0.0],
+            "World War 2": [0.99, 0.05, 0.05, 0.0],
+            "Cold War": [0.0, 0.0, 0.0, 1.0],
         }
 
         async def canned(texts):
             return [vectors[t] for t in texts]
 
         resolver = DefaultEntityResolver(
-            store=store, embed_fn=canned, high_thresh=0.9, low_thresh=0.5,
+            store=store,
+            embed_fn=canned,
+            high_thresh=0.9,
+            low_thresh=0.5,
         )
 
         r1 = await resolver.resolve("War", "WWII")

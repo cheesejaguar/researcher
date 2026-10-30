@@ -92,7 +92,7 @@ def _yaml_scalar(value: Any) -> str:
         return "null"
     # Strings: only quote if they contain YAML special characters.
     s = str(value)
-    if any(c in s for c in ':#&*!|>\'"%@`') or s.strip() != s:
+    if any(c in s for c in ":#&*!|>'\"%@`") or s.strip() != s:
         escaped = s.replace('"', '\\"')
         return f'"{escaped}"'
     return s
@@ -123,9 +123,7 @@ def _render_fields_table(state: EntityState) -> str:
         )
         source = fv.provenances[0].url if fv.provenances else ""
         source_link = f"[source]({source})" if source else "—"
-        rows.append(
-            f"| {field_name} | {value_str} | {fv.confidence:.2f} | {source_link} |"
-        )
+        rows.append(f"| {field_name} | {value_str} | {fv.confidence:.2f} | {source_link} |")
     return "\n".join(rows)
 
 
@@ -284,9 +282,7 @@ class ObsidianWriter:
             return
         # Validate that the vault root (the user-provided directory) exists.
         if not self._vault_path.exists():
-            raise ObsidianVaultNotFound(
-                f"Obsidian vault root does not exist: {self._vault_path}"
-            )
+            raise ObsidianVaultNotFound(f"Obsidian vault root does not exist: {self._vault_path}")
         try:
             self.root_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
@@ -343,6 +339,7 @@ class ObsidianWriter:
             self._stats["errors"] += 1
             try:
                 import logging
+
                 logging.getLogger("researcher.obsidian").warning(
                     "obsidian write failed for %s: %s", key, e
                 )
@@ -465,6 +462,7 @@ class ObsidianWriter:
                 self._stats["errors"] += 1
                 try:
                     import logging
+
                     logging.getLogger("researcher.obsidian").warning(
                         "obsidian index write failed for %s: %s", et, e
                     )
@@ -534,9 +532,7 @@ class ObsidianWriter:
                     + r")(?!\w)(?!\])"
                 )
                 try:
-                    content = await asyncio.to_thread(
-                        md_file.read_text, encoding="utf-8"
-                    )
+                    content = await asyncio.to_thread(md_file.read_text, encoding="utf-8")
                 except OSError:
                     continue
                 # Don't touch the YAML frontmatter (between the first two `---`).
@@ -552,9 +548,7 @@ class ObsidianWriter:
                     continue
                 new_content = frontmatter + new_body if frontmatter else new_body
                 try:
-                    await asyncio.to_thread(
-                        self._atomic_write, md_file, new_content
-                    )
+                    await asyncio.to_thread(self._atomic_write, md_file, new_content)
                 except OSError:
                     self._stats["errors"] += 1
 
@@ -579,21 +573,15 @@ class ObsidianWriter:
             if not target_path.exists():
                 continue
             try:
-                content = await asyncio.to_thread(
-                    target_path.read_text, encoding="utf-8"
-                )
+                content = await asyncio.to_thread(target_path.read_text, encoding="utf-8")
             except OSError:
                 continue
             if "## See Also" in content:
                 continue
-            wikilinks = "\n".join(
-                f"- [[{_safe_filename(name)}]]" for _, name in targets
-            )
+            wikilinks = "\n".join(f"- [[{_safe_filename(name)}]]" for _, name in targets)
             see_also_block = f"\n\n## See Also\n\n{wikilinks}\n"
             new_content = content.rstrip() + see_also_block
             try:
-                await asyncio.to_thread(
-                    self._atomic_write, target_path, new_content
-                )
+                await asyncio.to_thread(self._atomic_write, target_path, new_content)
             except OSError:
                 self._stats["errors"] += 1

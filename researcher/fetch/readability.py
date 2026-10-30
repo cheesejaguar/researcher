@@ -42,7 +42,7 @@ def extract_readable(
     if not html or not html.strip():
         return None
     try:
-        text = trafilatura.extract(html, url=url, include_comments=False)
-        return text
+        extracted = trafilatura.extract(html, url=url, include_comments=False)
+        return extracted
     except Exception:
         return None

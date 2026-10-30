@@ -62,9 +62,7 @@ def test_agent_result_needs_revision_default_false():
 
 
 def test_agent_result_needs_revision_can_be_set():
-    r = AgentResult(
-        task_id="t1", agent_id="a1", state=AgentState.DONE, needs_revision=True
-    )
+    r = AgentResult(task_id="t1", agent_id="a1", state=AgentState.DONE, needs_revision=True)
     assert r.needs_revision is True
 
 
@@ -113,7 +111,8 @@ async def test_orchestrator_redispatches_when_needs_revision_set(tmp_path):
             "fields": [{"name": "name", "type": "str", "required": True}],
         }
 
-        async def _noop(*args, **kwargs): return None
+        async def _noop(*args, **kwargs):
+            return None
 
         writer = FactWriter(
             store=store,
@@ -132,6 +131,7 @@ async def test_orchestrator_redispatches_when_needs_revision_set(tmp_path):
         # and a normal (empty-but-no-revision) result on attempt=1.
         runner = StubCliRunner()
         from researcher.backends.models import CliResult, SubagentResponse
+
         runner.add_response_for_any(
             CliResult(
                 ok=True,
@@ -188,34 +188,50 @@ async def test_orchestrator_does_not_redispatch_when_revision_disabled(tmp_path)
         bus = StubEventBus()
         llm = StubLLMClient()
         resolver = StubEntityResolver()
-        entity_schema = {"entity_type": "War", "fields": [{"name": "name", "type": "str", "required": True}]}
+        entity_schema = {
+            "entity_type": "War",
+            "fields": [{"name": "name", "type": "str", "required": True}],
+        }
 
-        async def _noop(*args, **kwargs): return None
+        async def _noop(*args, **kwargs):
+            return None
 
         writer = FactWriter(
-            store=store, resolver=resolver, entity_schema=entity_schema,
-            emit_fact=_noop, emit_conflict=_noop,
+            store=store,
+            resolver=resolver,
+            entity_schema=entity_schema,
+            emit_fact=_noop,
+            emit_conflict=_noop,
         )
         scheduler = Scheduler(spec=spec, store=store)
         budget = Budget(usd_cap=3.0, wall_cap_s=600)
-        backend_resolver = BackendResolver(which_fn=lambda c: "/usr/local/bin/claude" if c == "claude" else None)
+        backend_resolver = BackendResolver(
+            which_fn=lambda c: "/usr/local/bin/claude" if c == "claude" else None
+        )
 
         runner = StubCliRunner()
         from researcher.backends.models import CliResult, SubagentResponse
+
         runner.add_response_for_any(
             CliResult(
                 ok=True,
                 data=SubagentResponse(entity_name="WWII", extractions=[], diagnostics=""),
-                wall_ms=100, exit_code=0,
+                wall_ms=100,
+                exit_code=0,
                 raw_usage={"input_tokens": 50, "output_tokens": 25},
             )
         )
 
         orch = Orchestrator(
             spec=spec,
-            store=store, llm=llm, bus=bus, writer=writer,  # type: ignore[arg-type]
-            scheduler=scheduler, budget=budget,
-            run_id="no-rev-test", max_parallel_agents=2,
+            store=store,
+            llm=llm,
+            bus=bus,
+            writer=writer,  # type: ignore[arg-type]
+            scheduler=scheduler,
+            budget=budget,
+            run_id="no-rev-test",
+            max_parallel_agents=2,
         )
         orch.set_backend_resolver(backend_resolver)
         orch.set_cli_runner_factory(lambda kind: runner)

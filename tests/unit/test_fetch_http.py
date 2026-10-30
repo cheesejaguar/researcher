@@ -9,6 +9,7 @@ import httpx
 from researcher.fetch.http import FetchResult, HttpFetcher
 from researcher.fetch.politeness import PolitenessLimiter
 from researcher.fetch.robots import RobotsCache
+from researcher.spec import SourcePolicy
 
 
 def _mock_client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.AsyncClient:
@@ -152,4 +153,123 @@ async def test_fetch_acquires_politeness_before_http() -> None:
     result = await fetcher.fetch("https://order.example/p")
     assert result.ok is True
     assert order == ["politeness", "http"]
+    await client.aclose()
+
+
+# ---------- SSRF / policy hardening ----------
+
+
+async def test_fetch_blocks_non_http_schemes() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, text="should not be reached")
+
+    client = _mock_client(handler)
+    fetcher = HttpFetcher(politeness=PolitenessLimiter(default_rps=100.0), client=client)
+    result = await fetcher.fetch("file:///etc/passwd")
+    assert result.ok is False
+    assert result.error == "blocked_scheme"
+    assert calls["n"] == 0
+    await client.aclose()
+
+
+async def test_fetch_blocks_embedded_credentials() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, text="nope")
+
+    client = _mock_client(handler)
+    fetcher = HttpFetcher(politeness=PolitenessLimiter(default_rps=100.0), client=client)
+    result = await fetcher.fetch("https://user:pass@example.com/private")
+    assert result.error == "blocked_credentials"
+    assert calls["n"] == 0
+    await client.aclose()
+
+
+async def test_fetch_blocks_hosts_resolving_to_private_ips() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, text="secret")
+
+    async def resolve(host: str) -> list[str]:
+        return ["127.0.0.1"] if host == "internal.example" else ["93.184.216.34"]
+
+    client = _mock_client(handler)
+    fetcher = HttpFetcher(
+        politeness=PolitenessLimiter(default_rps=100.0),
+        client=client,
+        resolve_host=resolve,
+    )
+    result = await fetcher.fetch("https://internal.example/admin")
+    assert result.error == "blocked_private_address"
+    assert calls["n"] == 0
+    await client.aclose()
+
+
+async def test_fetch_revalidates_redirect_targets() -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        if request.url.host == "public.example":
+            return httpx.Response(
+                302,
+                headers={"location": "https://internal.example/admin"},
+            )
+        return httpx.Response(200, text="secret")
+
+    async def resolve(host: str) -> list[str]:
+        return ["127.0.0.1"] if host == "internal.example" else ["93.184.216.34"]
+
+    client = _mock_client(handler)
+    fetcher = HttpFetcher(
+        politeness=PolitenessLimiter(default_rps=100.0),
+        client=client,
+        resolve_host=resolve,
+    )
+    result = await fetcher.fetch("https://public.example/start")
+    assert result.error == "blocked_private_address"
+    assert requests == ["https://public.example/start"]
+    await client.aclose()
+
+
+async def test_fetch_enforces_source_policy_before_request() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, text="blocked")
+
+    client = _mock_client(handler)
+    fetcher = HttpFetcher(
+        politeness=PolitenessLimiter(default_rps=100.0),
+        client=client,
+        source_policy=SourcePolicy(deny_domains=["evil.example"]),
+    )
+    result = await fetcher.fetch("https://evil.example/page")
+    assert result.error == "source_policy_blocked"
+    assert calls["n"] == 0
+    await client.aclose()
+
+
+async def test_fetch_caps_oversized_response_bodies() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"x" * 100)
+
+    client = _mock_client(handler)
+    fetcher = HttpFetcher(
+        politeness=PolitenessLimiter(default_rps=100.0),
+        client=client,
+        max_bytes=8,
+    )
+    result = await fetcher.fetch("https://example.com/big")
+    assert result.ok is False
+    assert result.error == "response_too_large"
+    assert result.content == ""
     await client.aclose()

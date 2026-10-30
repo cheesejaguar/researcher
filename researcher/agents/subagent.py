@@ -80,9 +80,7 @@ class SubagentResearcher(Agent):
 
         await self.set_state(AgentState.FETCHING)
         start = time.monotonic()
-        result = await self._runner.execute(
-            prompt=prompt, schema=schema, timeout_s=self._timeout_s
-        )
+        result = await self._runner.execute(prompt=prompt, schema=schema, timeout_s=self._timeout_s)
         wall_ms = int((time.monotonic() - start) * 1000)
 
         # Record the call in the budget regardless of success — the subprocess did run.
@@ -168,9 +166,7 @@ class SubagentResearcher(Agent):
             task_description=task_description,
             field_list=field_names,
             max_entities=self._max_entities,
-            schema_json=json.dumps(
-                SubagentResponse.model_json_schema(), separators=(",", ":")
-            ),
+            schema_json=json.dumps(SubagentResponse.model_json_schema(), separators=(",", ":")),
             skill_fragments=skill_fragments,
         )
         return f"{SYSTEM_PROMPT}\n\n{user_prompt}"

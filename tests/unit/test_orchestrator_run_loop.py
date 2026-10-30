@@ -1,6 +1,5 @@
 """Tests for the Orchestrator.run() loop — agent dispatch, claim submission, stop reasons."""
 
-
 import pytest
 
 from researcher.backends.models import CliResult
@@ -121,7 +120,12 @@ async def test_run_dispatches_subagent_and_submits_claims_to_writer():
     # Claims submitted to writer. The fixture has 4 extractions, so at least 4 submits.
     assert writer.metrics["submitted"] >= 4
     # No exceptions propagated.
-    assert reason in (StopReason.NO_TASKS, StopReason.PLATEAU, StopReason.BUDGET, StopReason.DEADLINE)
+    assert reason in (
+        StopReason.NO_TASKS,
+        StopReason.PLATEAU,
+        StopReason.BUDGET,
+        StopReason.DEADLINE,
+    )
     # At least one SubagentCall event on the bus.
     subagent_events = [e for e in bus.events if isinstance(e, SubagentCall)]
     assert len(subagent_events) >= 1
@@ -169,9 +173,7 @@ async def test_run_native_path_raises_not_implemented():
 async def test_run_records_subagent_failure_and_circuit_breaks():
     """After 3 spawn/timeout failures in one cycle, the resolver is circuit-broken."""
     runner = StubCliRunner()
-    runner.add_response_for_any(
-        CliResult(ok=False, error="timeout", wall_ms=100, exit_code=None)
-    )
+    runner.add_response_for_any(CliResult(ok=False, error="timeout", wall_ms=100, exit_code=None))
     # Need enough tasks to trigger the circuit break (3+ in one cycle).
     spec = _sample_spec(policy="auto")
     # Force multiple tasks by expanding the seed list.
@@ -211,9 +213,7 @@ async def test_run_stops_with_subagent_cap_reason():
         backend_policy="auto",
         max_cycles=1,
     )
-    orch, _bus, _store, _writer = await _make_orchestrator(
-        spec, runner=runner, budget=budget
-    )
+    orch, _bus, _store, _writer = await _make_orchestrator(spec, runner=runner, budget=budget)
 
     reason = await orch.run()
     # After the cap is hit, the run should end with SUBAGENT_CAP (possibly after
@@ -243,9 +243,7 @@ async def test_run_syncs_budget_from_store_metrics_and_warns():
     runner.add_response_for_any(make_wars_discover_result())
     spec = _sample_spec(policy="auto")
     budget = Budget(usd_cap=1.0, wall_cap_s=600)
-    orch, bus, store, _writer = await _make_orchestrator(
-        spec, runner=runner, budget=budget
-    )
+    orch, bus, store, _writer = await _make_orchestrator(spec, runner=runner, budget=budget)
     store.set_cost(0.6)
 
     reason = await orch.run()
@@ -264,9 +262,7 @@ async def test_run_stops_when_synced_budget_exceeds_cap():
     runner.add_response_for_any(make_wars_discover_result())
     spec = _sample_spec(policy="auto")
     budget = Budget(usd_cap=1.0, wall_cap_s=600)
-    orch, _bus, store, _writer = await _make_orchestrator(
-        spec, runner=runner, budget=budget
-    )
+    orch, _bus, store, _writer = await _make_orchestrator(spec, runner=runner, budget=budget)
     store.set_cost(1.0)
 
     reason = await orch.run()

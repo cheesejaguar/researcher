@@ -50,14 +50,19 @@ class StubKnowledgeStore(KnowledgeStore):
     async def init_schema(self, entity_class: type[BaseModel]) -> None:
         self._schema = entity_class.model_json_schema()
 
-    async def upsert_entity(
-        self, entity_type: str, name: str, fields: dict[str, FieldCell]
-    ) -> str:
+    async def upsert_entity(self, entity_type: str, name: str, fields: dict[str, FieldCell]) -> str:
         # Match by name within type, else create.
         for eid, ent in self._entities.items():
-            if ent.type == entity_type and ent.fields.get("name", FieldCell(
-                value="", confidence=0, provenance_ids=[], updated_at=datetime.now(UTC)
-            )).value == name:
+            if (
+                ent.type == entity_type
+                and ent.fields.get(
+                    "name",
+                    FieldCell(
+                        value="", confidence=0, provenance_ids=[], updated_at=datetime.now(UTC)
+                    ),
+                ).value
+                == name
+            ):
                 ent.fields.update(fields)
                 return eid
         eid = uuid4().hex
@@ -101,9 +106,7 @@ class StubKnowledgeStore(KnowledgeStore):
 
     async def record_conflict(self, conflict: Conflict) -> None:
         # Upsert by conflict_id so the stub matches DuckDBKnowledgeStore semantics.
-        self._conflicts = [
-            c for c in self._conflicts if c.conflict_id != conflict.conflict_id
-        ]
+        self._conflicts = [c for c in self._conflicts if c.conflict_id != conflict.conflict_id]
         self._conflicts.append(conflict)
 
     async def snapshot_metrics(self) -> StoreMetrics:
@@ -130,9 +133,7 @@ class StubKnowledgeStore(KnowledgeStore):
             cost_usd_total=self._cost_usd,
         )
 
-    async def snapshot_coverage(
-        self, confidence_threshold: float = 0.5
-    ) -> CoverageSnapshot:
+    async def snapshot_coverage(self, confidence_threshold: float = 0.5) -> CoverageSnapshot:
         fields_below: dict[str, int] = {}
         for ent in self._entities.values():
             for field_name, cell in ent.fields.items():
