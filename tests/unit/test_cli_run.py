@@ -12,12 +12,20 @@ configured.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI styles so assertions work when CI forces color output."""
+    return _ANSI_RE.sub("", text)
 
 
 @pytest.fixture
@@ -91,9 +99,10 @@ def test_run_help_shows_all_flags(cli_runner: CliRunner) -> None:
 
     result = cli_runner.invoke(app, ["run", "--help"])
     assert result.exit_code == 0, result.output
-    assert "--backend" in result.output
-    assert "--obsidian-vault" in result.output
-    assert "--runs-dir" in result.output
+    output = _strip_ansi(result.output)
+    assert "--backend" in output
+    assert "--obsidian-vault" in output
+    assert "--runs-dir" in output
 
 
 def test_python_module_entrypoint_help_works() -> None:
