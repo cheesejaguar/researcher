@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
+
 import pytest
 
 from researcher.budget import Budget
@@ -13,28 +16,8 @@ from researcher.spec import (
     RunSpec,
     VerificationConfig,
 )
-from tests.stubs.bus import StubEventBus
+from researcher.storage.store import FieldCell
 from tests.stubs.llm import StubLLMClient
-from tests.stubs.store import StubKnowledgeStore
-
-
-class _CouncilStore(StubKnowledgeStore):
-    def __init__(self) -> None:
-        super().__init__()
-        self.votes: list[dict] = []
-
-    async def query(self, sql: str, params: tuple = ()) -> list[dict]:
-        return [
-            {
-                "entity_id": "e1",
-                "field_name": "name",
-                "value_json": '"World War II"',
-                "confidence": 0.9,
-            }
-        ]
-
-    async def record_verification_vote(self, vote: dict) -> None:
-        self.votes.append(vote)
 
 
 def _spec() -> RunSpec:
@@ -58,8 +41,20 @@ def _spec() -> RunSpec:
 
 
 @pytest.mark.asyncio
-async def test_council_calls_every_model_and_records_its_vote() -> None:
-    store = _CouncilStore()
+async def test_council_calls_every_model_and_records_its_vote(store, bus) -> None:
+    # One stored entity whose required ``name`` field is up for review.
+    entity_id = await store.upsert_entity(
+        "War",
+        "World War II",
+        {
+            "name": FieldCell(
+                value="World War II",
+                confidence=0.9,
+                provenance_ids=[],
+                updated_at=datetime.now(UTC),
+            )
+        },
+    )
     llm = StubLLMClient()
     calls: list[tuple[str | None, LLMTier]] = []
 
@@ -84,7 +79,7 @@ async def test_council_calls_every_model_and_records_its_vote() -> None:
         spec=_spec(),
         store=store,
         llm=llm,
-        bus=StubEventBus(),
+        bus=bus,
         writer=None,  # type: ignore[arg-type]
         scheduler=None,  # type: ignore[arg-type]
         budget=Budget(usd_cap=1.0, wall_cap_s=60),
@@ -98,8 +93,15 @@ async def test_council_calls_every_model_and_records_its_vote() -> None:
         ("model-a", LLMTier.SMART),
         ("model-b", LLMTier.SMART),
     ]
-    assert [v["model"] for v in store.votes] == ["model-a", "model-b"]
-    assert all(v["vote"] == "World War II" for v in store.votes)
-    assert all(v["confidence"] == pytest.approx(0.91) for v in store.votes)
-    assert store.votes[0]["rationale"] == "verified by model-a"
-    assert store.votes[1]["rationale"] == "verified by model-b"
+    votes = await store.query(
+        "SELECT run_id, entity_id, field_name, model, vote_json, confidence, rationale "
+        "FROM verification_votes ORDER BY model"
+    )
+    assert [v["model"] for v in votes] == ["model-a", "model-b"]
+    assert all(v["run_id"] == "run-council" for v in votes)
+    assert all(v["entity_id"] == entity_id for v in votes)
+    assert all(v["field_name"] == "name" for v in votes)
+    assert all(json.loads(v["vote_json"]) == "World War II" for v in votes)
+    assert all(v["confidence"] == pytest.approx(0.91) for v in votes)
+    assert votes[0]["rationale"] == "verified by model-a"
+    assert votes[1]["rationale"] == "verified by model-b"

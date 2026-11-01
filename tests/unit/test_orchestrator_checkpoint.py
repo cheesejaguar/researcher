@@ -76,29 +76,17 @@ async def test_save_checkpoint_overwrites_previous(tmp_path):
         await store.close()
 
 
-def test_scheduler_serialize_roundtrip():
+async def test_scheduler_serialize_roundtrip(store):
     spec = _sample_spec()
 
-    class _StubStore:
-        async def snapshot_metrics(self):
-            from researcher.storage.store import StoreMetrics
-
-            return StoreMetrics(
-                entities_total=0,
-                by_type={},
-                fields_filled_pct=0.0,
-                conflicts_open=0,
-                cost_usd_total=0.0,
-            )
-
-    sched = Scheduler(spec=spec, store=_StubStore())  # type: ignore[arg-type]
+    sched = Scheduler(spec=spec, store=store)
     sched._entity_history = [5, 10, 15]
     sched._cycle = 3
     snap = sched.serialize()
     assert snap["cycle"] == 3
     assert snap["entity_history"] == [5, 10, 15]
     # Restore into a fresh scheduler.
-    sched2 = Scheduler(spec=spec, store=_StubStore())  # type: ignore[arg-type]
+    sched2 = Scheduler(spec=spec, store=store)
     sched2.restore(snap)
     assert sched2._cycle == 3
     assert sched2._entity_history == [5, 10, 15]
@@ -119,14 +107,13 @@ def test_budget_serialize_roundtrip():
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_saves_checkpoint_each_cycle(tmp_path):
+async def test_orchestrator_saves_checkpoint_each_cycle(tmp_path, bus):
     """End-to-end: run an orchestrator (with stub agents) for 1 cycle and verify a checkpoint row exists."""
     from researcher.orchestrator import Orchestrator
     from researcher.storage.writer import FactWriter
-    from tests.stubs.bus import StubEventBus
     from tests.stubs.cli_runner import StubCliRunner, make_wars_discover_result
     from tests.stubs.llm import StubLLMClient
-    from tests.stubs.resolver import StubEntityResolver
+    from tests.support import make_resolver
 
     runner = StubCliRunner()
     runner.add_response_for_any(make_wars_discover_result())
@@ -137,9 +124,8 @@ async def test_orchestrator_saves_checkpoint_each_cycle(tmp_path):
         from researcher.spec import build_entity_class
 
         await store.init_schema(build_entity_class(spec.entities[0]))
-        bus = StubEventBus()
         llm = StubLLMClient()
-        resolver = StubEntityResolver()
+        resolver = make_resolver(store)
         entity_schema = {
             "entity_type": "War",
             "fields": [{"name": "name", "type": "str", "required": True}],

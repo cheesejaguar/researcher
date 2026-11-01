@@ -63,7 +63,7 @@ async def test_stub_interrupt_handler_can_abort():
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_calls_interrupt_handler_at_declared_points(tmp_path):
+async def test_orchestrator_calls_interrupt_handler_at_declared_points(tmp_path, bus):
     """End-to-end: with after_cycle_end declared, the handler is called per cycle."""
     from researcher.backends.resolver import BackendResolver
     from researcher.budget import Budget
@@ -72,10 +72,9 @@ async def test_orchestrator_calls_interrupt_handler_at_declared_points(tmp_path)
     from researcher.spec import build_entity_class
     from researcher.storage.duckdb_store import DuckDBKnowledgeStore
     from researcher.storage.writer import FactWriter
-    from tests.stubs.bus import StubEventBus
     from tests.stubs.cli_runner import StubCliRunner, make_wars_discover_result
     from tests.stubs.llm import StubLLMClient
-    from tests.stubs.resolver import StubEntityResolver
+    from tests.support import make_resolver
 
     runner = StubCliRunner()
     runner.add_response_for_any(make_wars_discover_result())
@@ -84,9 +83,8 @@ async def test_orchestrator_calls_interrupt_handler_at_declared_points(tmp_path)
     await store.open()
     try:
         await store.init_schema(build_entity_class(spec.entities[0]))
-        bus = StubEventBus()
         llm = StubLLMClient()
-        resolver = StubEntityResolver()
+        resolver = make_resolver(store)
         entity_schema = {
             "entity_type": "War",
             "fields": [{"name": "name", "type": "str", "required": True}],
@@ -135,7 +133,7 @@ async def test_orchestrator_calls_interrupt_handler_at_declared_points(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_aborts_when_handler_returns_abort(tmp_path):
+async def test_orchestrator_aborts_when_handler_returns_abort(tmp_path, bus):
     """If the handler returns ABORT, the run terminates with StopReason.CTRL_C."""
     from researcher.backends.resolver import BackendResolver
     from researcher.budget import Budget
@@ -144,10 +142,9 @@ async def test_orchestrator_aborts_when_handler_returns_abort(tmp_path):
     from researcher.spec import build_entity_class
     from researcher.storage.duckdb_store import DuckDBKnowledgeStore
     from researcher.storage.writer import FactWriter
-    from tests.stubs.bus import StubEventBus
     from tests.stubs.cli_runner import StubCliRunner, make_wars_discover_result
     from tests.stubs.llm import StubLLMClient
-    from tests.stubs.resolver import StubEntityResolver
+    from tests.support import make_resolver
 
     runner = StubCliRunner()
     runner.add_response_for_any(make_wars_discover_result())
@@ -156,9 +153,8 @@ async def test_orchestrator_aborts_when_handler_returns_abort(tmp_path):
     await store.open()
     try:
         await store.init_schema(build_entity_class(spec.entities[0]))
-        bus = StubEventBus()
         llm = StubLLMClient()
-        resolver = StubEntityResolver()
+        resolver = make_resolver(store)
 
         async def _noop(*args, **kwargs):
             return None

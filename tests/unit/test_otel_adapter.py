@@ -343,8 +343,10 @@ def test_handle_ignores_unknown_event_types():
     class NotAnEvent:
         pass
 
-    # Should not raise.
+    # Should not raise, and must not open or close any span.
     adapter.handle(NotAnEvent())  # type: ignore[arg-type]
+    assert [s["name"] for s in exp.started] == ["run"]
+    assert exp.ended == []
 
 
 # ---------- EventBus subscribers ----------

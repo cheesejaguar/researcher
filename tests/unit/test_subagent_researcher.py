@@ -11,7 +11,6 @@ from researcher.budget import Budget
 from researcher.events import AgentLog, AgentStateChange, SubagentCall
 from researcher.models import AgentState, Task, TaskKind
 from researcher.skills.registry import SkillRegistry
-from tests.stubs.bus import StubEventBus
 from tests.stubs.cli_runner import (
     StubCliRunner,
     make_empty_result,
@@ -19,7 +18,7 @@ from tests.stubs.cli_runner import (
     make_wars_discover_result,
 )
 from tests.stubs.llm import StubLLMClient
-from tests.stubs.store import StubKnowledgeStore
+from tests.support import RecordingEventBus
 
 
 def _sample_task() -> Task:
@@ -34,13 +33,13 @@ def _sample_task() -> Task:
 
 
 def _make_agent(
+    store,
+    bus,
     runner: StubCliRunner,
     budget: Budget | None = None,
     skill_registry: SkillRegistry | None = None,
-) -> tuple[SubagentResearcher, StubEventBus]:
-    bus = StubEventBus()
+) -> tuple[SubagentResearcher, RecordingEventBus]:
     llm = StubLLMClient()
-    store = StubKnowledgeStore()
     entity_schema = {
         "entity_type": "War",
         "fields": [
@@ -69,10 +68,10 @@ def _make_agent(
 
 
 @pytest.mark.asyncio
-async def test_run_maps_extractions_to_fact_claims():
+async def test_run_maps_extractions_to_fact_claims(store, bus):
     runner = StubCliRunner()
     runner.add_response_for_any(make_wars_discover_result())
-    agent, bus = _make_agent(runner)
+    agent, bus = _make_agent(store, bus, runner)
 
     result = await agent.run(_sample_task())
 
@@ -88,7 +87,7 @@ async def test_run_maps_extractions_to_fact_claims():
 
 
 @pytest.mark.asyncio
-async def test_run_maps_multiple_entities_to_fact_claims():
+async def test_run_maps_multiple_entities_to_fact_claims(store, bus):
     runner = StubCliRunner()
     runner.add_response_for_any(
         CliResult(
@@ -127,7 +126,7 @@ async def test_run_maps_multiple_entities_to_fact_claims():
             exit_code=0,
         )
     )
-    agent, bus = _make_agent(runner)
+    agent, bus = _make_agent(store, bus, runner)
 
     result = await agent.run(_sample_task())
 
@@ -138,12 +137,12 @@ async def test_run_maps_multiple_entities_to_fact_claims():
 
 
 @pytest.mark.asyncio
-async def test_prompt_includes_matching_skill_card_guidance():
+async def test_prompt_includes_matching_skill_card_guidance(store, bus):
     runner = StubCliRunner()
     runner.add_response_for_any(make_empty_result())
     registry = SkillRegistry()
     registry.load_dir(Path("skills"))
-    agent, _ = _make_agent(runner, skill_registry=registry)
+    agent, _ = _make_agent(store, bus, runner, skill_registry=registry)
 
     await agent.run(_sample_task())
 
@@ -152,10 +151,10 @@ async def test_prompt_includes_matching_skill_card_guidance():
 
 
 @pytest.mark.asyncio
-async def test_run_reports_zero_cost():
+async def test_run_reports_zero_cost(store, bus):
     runner = StubCliRunner()
     runner.add_response_for_any(make_wars_discover_result())
-    agent, _ = _make_agent(runner)
+    agent, _ = _make_agent(store, bus, runner)
     result = await agent.run(_sample_task())
     assert result.cost_usd == 0.0
     # Tokens are reported for observability.
@@ -164,10 +163,10 @@ async def test_run_reports_zero_cost():
 
 
 @pytest.mark.asyncio
-async def test_run_emits_state_transitions_and_subagent_call_event():
+async def test_run_emits_state_transitions_and_subagent_call_event(store, bus):
     runner = StubCliRunner()
     runner.add_response_for_any(make_wars_discover_result())
-    agent, bus = _make_agent(runner)
+    agent, bus = _make_agent(store, bus, runner)
     await agent.run(_sample_task())
 
     state_events = [e for e in bus.events if isinstance(e, AgentStateChange)]
@@ -185,10 +184,10 @@ async def test_run_emits_state_transitions_and_subagent_call_event():
 
 
 @pytest.mark.asyncio
-async def test_run_returns_failed_on_timeout():
+async def test_run_returns_failed_on_timeout(store, bus):
     runner = StubCliRunner()
     runner.add_response_for_any(make_timeout_result())
-    agent, bus = _make_agent(runner)
+    agent, bus = _make_agent(store, bus, runner)
     result = await agent.run(_sample_task())
 
     assert result.state == AgentState.FAILED
@@ -198,10 +197,10 @@ async def test_run_returns_failed_on_timeout():
 
 
 @pytest.mark.asyncio
-async def test_run_emits_info_log_on_empty_extractions():
+async def test_run_emits_info_log_on_empty_extractions(store, bus):
     runner = StubCliRunner()
     runner.add_response_for_any(make_empty_result())
-    agent, bus = _make_agent(runner)
+    agent, bus = _make_agent(store, bus, runner)
     result = await agent.run(_sample_task())
 
     assert result.state == AgentState.DONE
@@ -213,11 +212,11 @@ async def test_run_emits_info_log_on_empty_extractions():
 
 
 @pytest.mark.asyncio
-async def test_run_respects_subagent_cap():
+async def test_run_respects_subagent_cap(store, bus):
     runner = StubCliRunner()
     runner.add_response_for_any(make_wars_discover_result())
     budget = Budget(usd_cap=3.0, wall_cap_s=600, max_subagent_calls=0)
-    agent, _ = _make_agent(runner, budget=budget)
+    agent, _ = _make_agent(store, bus, runner, budget=budget)
 
     result = await agent.run(_sample_task())
 
@@ -228,11 +227,11 @@ async def test_run_respects_subagent_cap():
 
 
 @pytest.mark.asyncio
-async def test_run_records_subagent_call_on_success():
+async def test_run_records_subagent_call_on_success(store, bus):
     runner = StubCliRunner()
     runner.add_response_for_any(make_wars_discover_result())
     budget = Budget(usd_cap=3.0, wall_cap_s=600)
-    agent, _ = _make_agent(runner, budget=budget)
+    agent, _ = _make_agent(store, bus, runner, budget=budget)
 
     await agent.run(_sample_task())
     assert budget.subagent_calls_total == 1

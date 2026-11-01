@@ -85,7 +85,7 @@ def test_budget_record_revision_increments():
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_redispatches_when_needs_revision_set(tmp_path):
+async def test_orchestrator_redispatches_when_needs_revision_set(tmp_path, bus):
     """A task that returns needs_revision=True with attempt=0 should be re-dispatched once with attempt=1."""
     from researcher.backends.resolver import BackendResolver
     from researcher.orchestrator import Orchestrator
@@ -93,19 +93,17 @@ async def test_orchestrator_redispatches_when_needs_revision_set(tmp_path):
     from researcher.spec import build_entity_class
     from researcher.storage.duckdb_store import DuckDBKnowledgeStore
     from researcher.storage.writer import FactWriter
-    from tests.stubs.bus import StubEventBus
     from tests.stubs.cli_runner import StubCliRunner
     from tests.stubs.llm import StubLLMClient
-    from tests.stubs.resolver import StubEntityResolver
+    from tests.support import make_resolver
 
     spec = _sample_spec(enable_conditional_revision=True)
     store = DuckDBKnowledgeStore(db_path=tmp_path / "s.duckdb")
     await store.open()
     try:
         await store.init_schema(build_entity_class(spec.entities[0]))
-        bus = StubEventBus()
         llm = StubLLMClient()
-        resolver = StubEntityResolver()
+        resolver = make_resolver(store)
         entity_schema = {
             "entity_type": "War",
             "fields": [{"name": "name", "type": "str", "required": True}],
@@ -167,7 +165,7 @@ async def test_orchestrator_redispatches_when_needs_revision_set(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_does_not_redispatch_when_revision_disabled(tmp_path):
+async def test_orchestrator_does_not_redispatch_when_revision_disabled(tmp_path, bus):
     """When enable_conditional_revision is False, no revision happens even if needs_revision=True."""
     from researcher.backends.resolver import BackendResolver
     from researcher.orchestrator import Orchestrator
@@ -175,19 +173,17 @@ async def test_orchestrator_does_not_redispatch_when_revision_disabled(tmp_path)
     from researcher.spec import build_entity_class
     from researcher.storage.duckdb_store import DuckDBKnowledgeStore
     from researcher.storage.writer import FactWriter
-    from tests.stubs.bus import StubEventBus
     from tests.stubs.cli_runner import StubCliRunner
     from tests.stubs.llm import StubLLMClient
-    from tests.stubs.resolver import StubEntityResolver
+    from tests.support import make_resolver
 
     spec = _sample_spec(enable_conditional_revision=False)  # disabled
     store = DuckDBKnowledgeStore(db_path=tmp_path / "s.duckdb")
     await store.open()
     try:
         await store.init_schema(build_entity_class(spec.entities[0]))
-        bus = StubEventBus()
         llm = StubLLMClient()
-        resolver = StubEntityResolver()
+        resolver = make_resolver(store)
         entity_schema = {
             "entity_type": "War",
             "fields": [{"name": "name", "type": "str", "required": True}],

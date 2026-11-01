@@ -16,6 +16,7 @@ from researcher.storage.writer import (
     score_confidence,
     validate_type,
 )
+from tests.support import make_resolver
 
 WAR_SCHEMA = {
     "entity_type": "War",
@@ -201,31 +202,10 @@ async def test_score_confidence_with_high_source_authority():
 
 @pytest.mark.asyncio
 async def test_writer_persists_fact_to_store(tmp_path):
-    from researcher.storage.resolver import (
-        EntityResolver,
-        ResolveDecision,
-        ResolveResult,
-    )
 
     store = DuckDBKnowledgeStore(db_path=tmp_path / "s.duckdb")
     await store.open()
     try:
-
-        class _StubResolver(EntityResolver):
-            async def resolve(self, entity_type, name, context=None):
-                return ResolveResult(
-                    decision=ResolveDecision.AUTO_MERGE,
-                    entity_id="stub",
-                    similarity=1.0,
-                    candidate_ids=[],
-                )
-
-            async def add_distinct_pair(self, a, b):
-                return None
-
-            async def is_blocked(self, a, b):
-                return False
-
         emitted_facts: list[tuple[str, str]] = []
 
         async def emit_fact(eid, claim):
@@ -236,7 +216,7 @@ async def test_writer_persists_fact_to_store(tmp_path):
 
         writer = FactWriter(
             store=store,
-            resolver=_StubResolver(),
+            resolver=make_resolver(store),
             entity_schema=WAR_SCHEMA,
             emit_fact=emit_fact,
             emit_conflict=emit_conflict,
@@ -265,11 +245,6 @@ async def test_writer_persists_fact_to_store(tmp_path):
 
 @pytest.mark.asyncio
 async def test_writer_records_conflict_when_value_differs(tmp_path):
-    from researcher.storage.resolver import (
-        EntityResolver,
-        ResolveDecision,
-        ResolveResult,
-    )
 
     store = DuckDBKnowledgeStore(db_path=tmp_path / "s.duckdb")
     await store.open()
@@ -282,21 +257,6 @@ async def test_writer_records_conflict_when_value_differs(tmp_path):
         )
         await store.upsert_entity("War", "WWII", {"start_year": existing_cell})
 
-        class _StubResolver(EntityResolver):
-            async def resolve(self, entity_type, name, context=None):
-                return ResolveResult(
-                    decision=ResolveDecision.AUTO_MERGE,
-                    entity_id="stub",
-                    similarity=1.0,
-                    candidate_ids=[],
-                )
-
-            async def add_distinct_pair(self, a, b):
-                return None
-
-            async def is_blocked(self, a, b):
-                return False
-
         conflict_calls: list[tuple[str, list[FieldCell]]] = []
 
         async def emit_conflict(eid, cells):
@@ -307,7 +267,7 @@ async def test_writer_records_conflict_when_value_differs(tmp_path):
 
         writer = FactWriter(
             store=store,
-            resolver=_StubResolver(),
+            resolver=make_resolver(store),
             entity_schema=WAR_SCHEMA,
             emit_fact=emit_fact,
             emit_conflict=emit_conflict,
@@ -369,11 +329,9 @@ def _resolver_writer(store, resolver):
 
 
 @pytest.mark.asyncio
-async def test_writer_auto_merge_canonicalizes_entity_name() -> None:
+async def test_writer_auto_merge_canonicalizes_entity_name(store) -> None:
     from researcher.storage.resolver import ResolveDecision
-    from tests.stubs.store import StubKnowledgeStore
 
-    store = StubKnowledgeStore()
     existing_id = await store.upsert_entity("War", "World War II", {})
     resolver = _FixedResolver(ResolveDecision.AUTO_MERGE, existing_id)
     writer = _resolver_writer(store, resolver)
@@ -385,17 +343,15 @@ async def test_writer_auto_merge_canonicalizes_entity_name() -> None:
     entity = await store.get_entity(existing_id)
     assert entity is not None
     assert entity.fields["start_year"].value == 1939
-    rows = [eid for eid, ent in store._entities.items() if ent.fields["name"].value == "WW2"]
+    rows = await store.query("SELECT id FROM entities WHERE name = ?", ("WW2",))
     assert rows == []
     assert writer.metrics["auto_merges"] == 1
 
 
 @pytest.mark.asyncio
-async def test_writer_pending_keeps_provisional_entity_separate() -> None:
+async def test_writer_pending_keeps_provisional_entity_separate(store) -> None:
     from researcher.storage.resolver import ResolveDecision
-    from tests.stubs.store import StubKnowledgeStore
 
-    store = StubKnowledgeStore()
     existing_id = await store.upsert_entity("War", "World War II", {})
     resolver = _FixedResolver(ResolveDecision.PENDING, existing_id)
     writer = _resolver_writer(store, resolver)
@@ -406,22 +362,23 @@ async def test_writer_pending_keeps_provisional_entity_separate() -> None:
     canonical = await store.get_entity(existing_id)
     assert canonical is not None
     assert "start_year" not in canonical.fields
-    provisional = [ent for ent in store._entities.values() if ent.fields["name"].value == "WW2"]
+    provisional = await store.query("SELECT id FROM entities WHERE name = ?", ("WW2",))
     assert len(provisional) == 1
-    assert provisional[0].fields["start_year"].value == 1939
+    assert provisional[0]["id"] != existing_id
+    provisional_entity = await store.get_entity(provisional[0]["id"])
+    assert provisional_entity is not None
+    assert provisional_entity.fields["start_year"].value == 1939
     assert writer.metrics["pending_resolutions"] == 1
 
 
 @pytest.mark.asyncio
-async def test_writer_resolution_failure_still_persists_claim() -> None:
+async def test_writer_resolution_failure_still_persists_claim(store) -> None:
     from researcher.storage.resolver import ResolveDecision
-    from tests.stubs.store import StubKnowledgeStore
 
     class _BrokenResolver(_FixedResolver):
         async def resolve(self, entity_type, name, context=None):
             raise RuntimeError("embedding backend down")
 
-    store = StubKnowledgeStore()
     resolver = _BrokenResolver(ResolveDecision.PENDING, "ignored")
     writer = _resolver_writer(store, resolver)
 
@@ -429,5 +386,8 @@ async def test_writer_resolution_failure_still_persists_claim() -> None:
 
     assert outcome.written is True
     assert writer.metrics["resolution_errors"] == 1
-    rows = [ent for ent in store._entities.values() if ent.fields["name"].value == "WW2"]
+    rows = await store.query("SELECT id FROM entities WHERE name = ?", ("WW2",))
     assert len(rows) == 1
+    persisted = await store.get_entity(rows[0]["id"])
+    assert persisted is not None
+    assert persisted.fields["start_year"].value == 1939

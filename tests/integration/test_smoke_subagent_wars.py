@@ -20,22 +20,16 @@ from researcher.orchestrator import Orchestrator, StopReason
 from researcher.scheduler import Scheduler
 from researcher.spec import EntitySpec, FieldSpec, RunSpec
 from researcher.storage.writer import FactWriter
-from tests.stubs.bus import StubEventBus
 from tests.stubs.cli_runner import StubCliRunner, make_wars_discover_result
 from tests.stubs.llm import StubLLMClient
-from tests.stubs.resolver import StubEntityResolver
-from tests.stubs.store import StubKnowledgeStore
 
 
 @pytest.mark.asyncio
-async def test_subagent_smoke_end_to_end_offline():
+async def test_subagent_smoke_end_to_end_offline(store, bus):
     # Arrange
     runner = StubCliRunner()
     runner.add_response_for_any(make_wars_discover_result())
 
-    store = StubKnowledgeStore()
-    await store.open()
-    bus = StubEventBus()
     llm = StubLLMClient()
     budget = Budget(usd_cap=3.0, wall_cap_s=600)
     entity_schema = {
@@ -111,7 +105,7 @@ async def _noop_conflict(_entity_id, _cells):
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_full_run_smoke_offline():
+async def test_orchestrator_full_run_smoke_offline(store, bus, resolver):
     """Full Orchestrator.run() loop with StubCliRunner — the integration smoke for Wave 1-E."""
     runner = StubCliRunner()
     runner.add_response_for_any(make_wars_discover_result())
@@ -137,12 +131,8 @@ async def test_orchestrator_full_run_smoke_offline():
         max_cycles=1,
     )
 
-    store = StubKnowledgeStore()
-    await store.open()
-    bus = StubEventBus()
     llm = StubLLMClient()
     budget = Budget(usd_cap=3.0, wall_cap_s=600)
-    resolver = StubEntityResolver()
     entity_schema = {
         "entity_type": "War",
         "fields": [{"name": "name", "type": "str", "required": True}],
@@ -174,19 +164,22 @@ async def test_orchestrator_full_run_smoke_offline():
     # Act
     reason = await orch.run()
 
-    # Assert — stop reason is one of the expected terminal states
-    assert reason in (
-        StopReason.PLATEAU,
-        StopReason.NO_TASKS,
-        StopReason.BUDGET,
-        StopReason.DEADLINE,
-    ), f"unexpected stop reason: {reason}"
+    # Assert — max_cycles=1 ends the run as a plateau, not an error
+    assert reason == StopReason.PLATEAU, f"unexpected stop reason: {reason}"
 
     # Assert — two seeds became two tasks, each dispatched once
     assert len(runner.calls) == 2
 
     # Assert — claims submitted to the writer (4 per task × 2 tasks = 8)
     assert writer.metrics["submitted"] == 8
+
+    # Assert — the reduce step merged both tasks' claims into one entity
+    rows = await store.query("SELECT id, name FROM entities WHERE entity_type = 'War'")
+    assert [r["name"] for r in rows] == ["World War II"]
+    ent = await store.get_entity(rows[0]["id"])
+    assert ent is not None
+    assert ent.fields["start_year"].value == 1939
+    assert ent.fields["end_year"].value == 1945
 
     # Assert — at least one CycleStart + CycleEnd + exactly one RunComplete
     cycle_starts = [e for e in bus.events if isinstance(e, CycleStart)]

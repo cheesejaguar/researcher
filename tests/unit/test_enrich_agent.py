@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -11,9 +10,9 @@ from researcher.agents.enrich import EnrichAgent
 from researcher.agents.native_deps import NativeAgentDeps
 from researcher.llm.prompts import default_registry
 from researcher.models import AgentState, Task, TaskKind
-from tests.stubs.bus import StubEventBus
+from researcher.search.file_seeds import FileSeedsProvider
 from tests.stubs.llm import StubLLMClient
-from tests.stubs.store import StubKnowledgeStore
+from tests.support import mock_http
 
 
 def _entity_schema() -> dict:
@@ -36,13 +35,11 @@ def _enrich_task(entity_id: str) -> Task:
 
 
 def _make_deps() -> NativeAgentDeps:
-    search = MagicMock()
-    search.name = "mock"
-    search.search = AsyncMock(return_value=[])
-    http = MagicMock()
-    http.fetch = AsyncMock()
     return NativeAgentDeps(
-        search=search, http=http, prompts=default_registry(), max_fetch_per_task=2
+        search=FileSeedsProvider(seeds={}),
+        http=mock_http({}),
+        prompts=default_registry(),
+        max_fetch_per_task=2,
     )
 
 
@@ -57,12 +54,10 @@ def _llm_suggesting(related: list[str]) -> StubLLMClient:
 
 
 @pytest.mark.asyncio
-async def test_enrich_spawns_discover_tasks_for_related_entities() -> None:
-    store = StubKnowledgeStore()
+async def test_enrich_spawns_discover_tasks_for_related_entities(store, bus) -> None:
     entity_id = await store.upsert_entity(entity_type="War", name="World War II", fields={})
     deps = _make_deps()
     llm = _llm_suggesting(["Korean War", "Cold War"])
-    bus = StubEventBus()
 
     agent = EnrichAgent(
         agent_id="native-enr",
@@ -90,11 +85,9 @@ async def test_enrich_spawns_discover_tasks_for_related_entities() -> None:
 
 
 @pytest.mark.asyncio
-async def test_enrich_entity_not_found_returns_empty_spawned() -> None:
-    store = StubKnowledgeStore()
+async def test_enrich_entity_not_found_returns_empty_spawned(store, bus) -> None:
     deps = _make_deps()
     llm = _llm_suggesting([])
-    bus = StubEventBus()
 
     agent = EnrichAgent(
         agent_id="native-enr",
@@ -121,15 +114,6 @@ async def test_enrich_entity_not_found_returns_empty_spawned() -> None:
     assert result.spawned_tasks == []
 
 
-class _RelationStore(StubKnowledgeStore):
-    def __init__(self) -> None:
-        super().__init__()
-        self.relations: list[dict] = []
-
-    async def record_relation(self, **kwargs) -> None:
-        self.relations.append(kwargs)
-
-
 def _llm_with_relations(related: list[str], relations: list[dict]) -> StubLLMClient:
     llm = StubLLMClient()
 
@@ -143,10 +127,9 @@ def _llm_with_relations(related: list[str], relations: list[dict]) -> StubLLMCli
 
 
 @pytest.mark.asyncio
-async def test_enrich_records_declared_relations_and_spawns_targets() -> None:
+async def test_enrich_records_declared_relations_and_spawns_targets(store, bus) -> None:
     from researcher.spec import RelationSpec
 
-    store = _RelationStore()
     entity_id = await store.upsert_entity(entity_type="War", name="World War II", fields={})
     deps = _make_deps()
     deps.relations = [RelationSpec(name="ally_of", source_type="War", target_type="War")]
@@ -162,7 +145,7 @@ async def test_enrich_records_declared_relations_and_spawns_targets() -> None:
         agent_id="native-enrich",
         llm=llm,
         store=store,
-        emit=StubEventBus().emit,
+        emit=bus.emit,
         run_id="run-x",
         deps=deps,
         entity_schema=_entity_schema(),
@@ -172,20 +155,26 @@ async def test_enrich_records_declared_relations_and_spawns_targets() -> None:
     result = await agent.run(_enrich_task(entity_id))
 
     assert result.state == AgentState.DONE
-    assert len(store.relations) == 1
-    assert store.relations[0]["source_id"] == entity_id
-    assert store.relations[0]["relation_label"] == "ally_of"
-    assert store.relations[0]["confidence"] == pytest.approx(0.8)
+    # Only the relation declared in the spec is persisted, pointing at a
+    # newly created target entity.
+    neighbors = await store.find_neighbors(entity_id)
+    assert len(neighbors) == 1
+    assert neighbors[0]["relation_label"] == "ally_of"
+    assert neighbors[0]["confidence"] == pytest.approx(0.8)
+    target_rows = await store.query(
+        "SELECT entity_type, name FROM entities WHERE id = ?",
+        (neighbors[0]["target_id"],),
+    )
+    assert [(r["entity_type"], r["name"]) for r in target_rows] == [("War", "France")]
     assert [t.seed_query for t in result.spawned_tasks] == ["France"]
     assert result.spawned_tasks[0].kind == TaskKind.DISCOVER
     assert result.spawned_tasks[0].depth == 1
 
 
 @pytest.mark.asyncio
-async def test_enrich_stops_spawning_at_max_depth() -> None:
+async def test_enrich_stops_spawning_at_max_depth(store, bus) -> None:
     from researcher.spec import RelationSpec
 
-    store = _RelationStore()
     entity_id = await store.upsert_entity(entity_type="War", name="World War II", fields={})
     deps = _make_deps()
     deps.relations = [RelationSpec(name="ally_of", source_type="War", target_type="War")]
@@ -198,7 +187,7 @@ async def test_enrich_stops_spawning_at_max_depth() -> None:
         agent_id="native-enrich",
         llm=llm,
         store=store,
-        emit=StubEventBus().emit,
+        emit=bus.emit,
         run_id="run-x",
         deps=deps,
         entity_schema=_entity_schema(),

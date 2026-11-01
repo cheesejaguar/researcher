@@ -8,11 +8,20 @@ from collections.abc import Callable
 import httpx
 import pytest
 
+try:  # optional `pdf` extra
+    import pymupdf
+except ImportError:  # pragma: no cover - depends on installed extras
+    pymupdf = None
+
 from researcher.extract.chunker import chunk_text
 from researcher.fetch.http import FetchResult, HttpFetcher
 from researcher.fetch.pdf import PdfDoc, PdfExtractionError, extract_pdf
 from researcher.fetch.politeness import PolitenessLimiter
 from researcher.fetch.readability import extract_readable
+
+requires_pymupdf = pytest.mark.skipif(
+    pymupdf is None, reason="needs the optional `pdf` extra (uv sync --extra pdf)"
+)
 
 
 def _build_pdf(pages: list[str]) -> bytes:
@@ -50,6 +59,7 @@ def test_extract_pdf_raises_without_pymupdf(monkeypatch: pytest.MonkeyPatch) -> 
     assert "pymupdf" in str(ei.value).lower()
 
 
+@requires_pymupdf
 def test_extract_pdf_returns_doc() -> None:
     data = _build_pdf(["Hello PDF World"])
     doc = extract_pdf(data)
@@ -63,6 +73,7 @@ def test_extract_pdf_returns_doc() -> None:
     assert doc.pages[0].end_offset == len(doc.full_text)
 
 
+@requires_pymupdf
 def test_extract_pdf_multi_page_offsets() -> None:
     data = _build_pdf(["Page One Alpha", "Page Two Beta", "Page Three Gamma"])
     doc = extract_pdf(data)
@@ -153,6 +164,7 @@ async def test_http_fetcher_leaves_raw_bytes_none_for_html() -> None:
 # ---------------------------------------------------------------------------
 
 
+@requires_pymupdf
 def test_extract_readable_dispatches_to_pdf_path() -> None:
     data = _build_pdf(["Dispatch Readable Probe"])
     text = extract_readable("", raw_bytes=data, content_type="application/pdf")

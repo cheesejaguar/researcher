@@ -18,11 +18,8 @@ from researcher.orchestrator import Orchestrator
 from researcher.scheduler import Scheduler
 from researcher.spec import EntitySpec, FieldSpec, RunSpec
 from researcher.storage.writer import FactWriter
-from tests.stubs.bus import StubEventBus
 from tests.stubs.cli_runner import StubCliRunner, make_wars_discover_result
 from tests.stubs.llm import StubLLMClient
-from tests.stubs.resolver import StubEntityResolver
-from tests.stubs.store import StubKnowledgeStore
 
 
 def _which_claude(cmd: str) -> str | None:
@@ -38,7 +35,7 @@ async def _noop_conflict(_entity_id, _cells):
 
 
 @pytest.mark.asyncio
-async def test_obsidian_smoke_end_to_end_offline(tmp_path: Path):
+async def test_obsidian_smoke_end_to_end_offline(tmp_path: Path, store, bus, resolver):
     runner = StubCliRunner()
     runner.add_response_for_any(make_wars_discover_result())
 
@@ -63,12 +60,8 @@ async def test_obsidian_smoke_end_to_end_offline(tmp_path: Path):
         max_cycles=1,
     )
 
-    store = StubKnowledgeStore()
-    await store.open()
-    bus = StubEventBus()
     llm = StubLLMClient()
     budget = Budget(usd_cap=3.0, wall_cap_s=600)
-    resolver = StubEntityResolver()
     entity_schema = {
         "entity_type": "War",
         "fields": [{"name": "name", "type": "str", "required": True}],

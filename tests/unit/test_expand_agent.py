@@ -4,19 +4,19 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from researcher.agents.expand import ExpandAgent
 from researcher.agents.native_deps import NativeAgentDeps
-from researcher.fetch.http import FetchResult
 from researcher.llm.prompts import default_registry
 from researcher.models import AgentState, Task, TaskKind
-from researcher.search.base import SearchResult
-from tests.stubs.bus import StubEventBus
+from researcher.search.file_seeds import FileSeedsProvider
+from researcher.storage.duckdb_store import DuckDBKnowledgeStore
 from tests.stubs.llm import StubLLMClient
-from tests.stubs.store import StubKnowledgeStore
+from tests.support import mock_http
+
+WW2_URL = "https://en.wikipedia.org/wiki/World_War_II"
 
 
 def _entity_schema() -> dict:
@@ -43,30 +43,19 @@ def _make_task(target_id: str, field_hints: list[str] | None = None) -> Task:
 
 
 def _make_deps() -> NativeAgentDeps:
-    search = MagicMock()
-    search.name = "mock"
-    search.search = AsyncMock(
-        return_value=[
-            SearchResult(
-                title="WW2",
-                url="https://en.wikipedia.org/wiki/World_War_II",
-                snippet="",
-                rank=0,
-            )
-        ]
+    # ExpandAgent searches for "<entity name> <field hints>"; any other
+    # query finds nothing and the agent produces no claims.
+    search = FileSeedsProvider(
+        seeds={"World War II start_year end_year": [{"title": "WW2", "url": WW2_URL}]}
     )
-    http = MagicMock()
-    http.fetch = AsyncMock(
-        return_value=FetchResult(
-            url="https://en.wikipedia.org/wiki/World_War_II",
-            status=200,
-            content="<html><body><p>World War II ran from 1939 to 1945.</p></body></html>",
-            headers={},
-            ok=True,
-        )
+    http = mock_http(
+        {WW2_URL: (200, "<html><body><p>World War II ran from 1939 to 1945.</p></body></html>")}
     )
     return NativeAgentDeps(
-        search=search, http=http, prompts=default_registry(), max_fetch_per_task=2
+        search=search,
+        http=http,
+        prompts=default_registry(),
+        max_fetch_per_task=2,
     )
 
 
@@ -74,6 +63,7 @@ def _llm_returning(fields: dict[str, Any]) -> StubLLMClient:
     llm = StubLLMClient()
 
     async def fake_structured(messages, schema, tier, task_id, temperature=0.0, schema_retry=True):
+        llm.calls.append({"messages": messages})
         # Only populate the fields that are present in the schema.
         payload: dict[str, Any] = {}
         for name in schema.model_fields:
@@ -85,17 +75,15 @@ def _llm_returning(fields: dict[str, Any]) -> StubLLMClient:
     return llm
 
 
-async def _seed_entity(store: StubKnowledgeStore, name: str) -> str:
+async def _seed_entity(store: DuckDBKnowledgeStore, name: str) -> str:
     return await store.upsert_entity(entity_type="War", name=name, fields={})
 
 
 @pytest.mark.asyncio
-async def test_expand_happy_path_fills_fields() -> None:
-    store = StubKnowledgeStore()
+async def test_expand_happy_path_fills_fields(store, bus) -> None:
     entity_id = await _seed_entity(store, "World War II")
     deps = _make_deps()
     llm = _llm_returning({"start_year": 1939, "end_year": 1945})
-    bus = StubEventBus()
 
     agent = ExpandAgent(
         agent_id="native-exp",
@@ -119,14 +107,17 @@ async def test_expand_happy_path_fills_fields() -> None:
         assert claim.entity_name == "World War II"
         assert claim.entity_type == "War"
         assert claim.confidence == 0.8
+    # The agent searched for "<name> <hints>", fetched the hit through the
+    # real HttpFetcher + readability pipeline, and fed it to the LLM.
+    prompt = "\n".join(m["content"] for m in llm.calls[0]["messages"])
+    assert f"SOURCE: {WW2_URL}" in prompt
+    assert "ran from 1939 to 1945" in prompt
 
 
 @pytest.mark.asyncio
-async def test_expand_entity_not_found_returns_failed() -> None:
-    store = StubKnowledgeStore()
+async def test_expand_entity_not_found_returns_failed(store, bus) -> None:
     deps = _make_deps()
     llm = _llm_returning({})
-    bus = StubEventBus()
 
     agent = ExpandAgent(
         agent_id="native-exp",
@@ -147,13 +138,11 @@ async def test_expand_entity_not_found_returns_failed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_expand_partial_fields_only_claims_populated_ones() -> None:
-    store = StubKnowledgeStore()
+async def test_expand_partial_fields_only_claims_populated_ones(store, bus) -> None:
     entity_id = await _seed_entity(store, "World War I")
     deps = _make_deps()
     # Only start_year populated; end_year is None and should be skipped.
     llm = _llm_returning({"start_year": 1914})
-    bus = StubEventBus()
 
     agent = ExpandAgent(
         agent_id="native-exp",
@@ -175,40 +164,26 @@ async def test_expand_partial_fields_only_claims_populated_ones() -> None:
 
 
 @pytest.mark.asyncio
-async def test_expand_uses_per_field_source_provenance() -> None:
+async def test_expand_uses_per_field_source_provenance(store, bus) -> None:
     url_2 = "https://example.com/ww2"
     url_1 = "https://example.com/ww1"
-    search = MagicMock()
-    search.name = "mock"
-    search.search = AsyncMock(
-        return_value=[
-            SearchResult(title="WW2", url=url_2, snippet="", rank=0),
-            SearchResult(title="WW1", url=url_1, snippet="", rank=1),
-        ]
+    search = FileSeedsProvider(
+        seeds={
+            "World War II start_year end_year": [
+                {"title": "WW2", "url": url_2},
+                {"title": "WW1", "url": url_1},
+            ]
+        }
     )
-    http = MagicMock()
-    http.fetch = AsyncMock(
-        side_effect=[
-            FetchResult(
-                url=url_2,
-                status=200,
-                content="<html><body><p>WW2 ran 1939-1945.</p></body></html>",
-                headers={},
-                ok=True,
-            ),
-            FetchResult(
-                url=url_1,
-                status=200,
-                content="<html><body><p>WW1 ran 1914-1918.</p></body></html>",
-                headers={},
-                ok=True,
-            ),
-        ]
+    http = mock_http(
+        {
+            url_2: (200, "<html><body><p>WW2 ran 1939-1945.</p></body></html>"),
+            url_1: (200, "<html><body><p>WW1 ran 1914-1918.</p></body></html>"),
+        }
     )
     deps = NativeAgentDeps(
         search=search, http=http, prompts=default_registry(), max_fetch_per_task=3
     )
-    store = StubKnowledgeStore()
     entity_id = await _seed_entity(store, "World War II")
     llm = _llm_returning(
         {
@@ -222,7 +197,7 @@ async def test_expand_uses_per_field_source_provenance() -> None:
         agent_id="native-exp",
         llm=llm,
         store=store,
-        emit=StubEventBus().emit,
+        emit=bus.emit,
         run_id="run-x",
         deps=deps,
         entity_schema=_entity_schema(),

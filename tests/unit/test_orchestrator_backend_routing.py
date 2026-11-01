@@ -12,11 +12,9 @@ from researcher.orchestrator import Orchestrator, StopReason
 from researcher.scheduler import Scheduler
 from researcher.spec import EntitySpec, FieldSpec, RunSpec
 from researcher.storage.writer import FactWriter
-from tests.stubs.bus import StubEventBus
 from tests.stubs.cli_runner import StubCliRunner
 from tests.stubs.llm import StubLLMClient
-from tests.stubs.resolver import StubEntityResolver
-from tests.stubs.store import StubKnowledgeStore
+from tests.support import make_resolver
 
 
 def _which_none(_: str) -> str | None:
@@ -53,13 +51,10 @@ async def _noop_conflict(_entity_id, _cells):
 
 
 async def _make_orchestrator(
-    spec: RunSpec, which_fn, runner: StubCliRunner | None = None
+    store, bus, spec: RunSpec, which_fn, runner: StubCliRunner | None = None
 ) -> Orchestrator:
-    store = StubKnowledgeStore()
-    await store.open()
     llm = StubLLMClient()
-    bus = StubEventBus()
-    resolver = StubEntityResolver()
+    resolver = make_resolver(store)
     entity_schema = {
         "entity_type": "War",
         "fields": [{"name": "name", "type": "str", "required": True}],
@@ -102,29 +97,29 @@ def _sample_task() -> Task:
 
 
 @pytest.mark.asyncio
-async def test_auto_policy_with_no_cli_routes_native():
-    orch = await _make_orchestrator(_sample_spec("auto"), _which_none)
+async def test_auto_policy_with_no_cli_routes_native(store, bus):
+    orch = await _make_orchestrator(store, bus, _sample_spec("auto"), _which_none)
     choice = orch._resolver_pick(_sample_task())
     assert choice.kind is None
 
 
 @pytest.mark.asyncio
-async def test_auto_policy_with_claude_detected_routes_subagent():
-    orch = await _make_orchestrator(_sample_spec("auto"), _which_claude)
+async def test_auto_policy_with_claude_detected_routes_subagent(store, bus):
+    orch = await _make_orchestrator(store, bus, _sample_spec("auto"), _which_claude)
     choice = orch._resolver_pick(_sample_task())
     assert choice.kind == CliKind.CLAUDE_CODE
 
 
 @pytest.mark.asyncio
-async def test_api_policy_overrides_detection():
-    orch = await _make_orchestrator(_sample_spec("api"), _which_claude)
+async def test_api_policy_overrides_detection(store, bus):
+    orch = await _make_orchestrator(store, bus, _sample_spec("api"), _which_claude)
     choice = orch._resolver_pick(_sample_task())
     assert choice.kind is None
 
 
 @pytest.mark.asyncio
-async def test_circuit_break_clears_detected_after_three_failures():
-    orch = await _make_orchestrator(_sample_spec("auto"), _which_claude)
+async def test_circuit_break_clears_detected_after_three_failures(store, bus):
+    orch = await _make_orchestrator(store, bus, _sample_spec("auto"), _which_claude)
     assert orch._resolver_pick(_sample_task()).kind == CliKind.CLAUDE_CODE
     orch._record_subagent_failure("spawn_failed: ENOENT")
     orch._record_subagent_failure("timeout")
@@ -137,23 +132,23 @@ async def test_circuit_break_clears_detected_after_three_failures():
 
 
 @pytest.mark.asyncio
-async def test_usage_limit_clears_detected_immediately():
-    orch = await _make_orchestrator(_sample_spec("auto"), _which_claude)
+async def test_usage_limit_clears_detected_immediately(store, bus):
+    orch = await _make_orchestrator(store, bus, _sample_spec("auto"), _which_claude)
     assert orch._resolver_pick(_sample_task()).kind == CliKind.CLAUDE_CODE
     orch._record_subagent_failure("usage_limit_reached")
     assert orch._resolver_pick(_sample_task()).kind is None
 
 
 @pytest.mark.asyncio
-async def test_auth_required_clears_detected_immediately():
-    orch = await _make_orchestrator(_sample_spec("auto"), _which_claude)
+async def test_auth_required_clears_detected_immediately(store, bus):
+    orch = await _make_orchestrator(store, bus, _sample_spec("auto"), _which_claude)
     orch._record_subagent_failure("auth_required")
     assert orch._resolver_pick(_sample_task()).kind is None
 
 
 @pytest.mark.asyncio
-async def test_failure_counter_resets_between_cycles():
-    orch = await _make_orchestrator(_sample_spec("auto"), _which_claude)
+async def test_failure_counter_resets_between_cycles(store, bus):
+    orch = await _make_orchestrator(store, bus, _sample_spec("auto"), _which_claude)
     orch._record_subagent_failure("timeout")
     orch._record_subagent_failure("timeout")
     orch._reset_cycle_failure_counters()  # simulate cycle boundary
@@ -169,9 +164,9 @@ async def test_stop_reason_subagent_cap_exists():
 
 
 @pytest.mark.asyncio
-async def test_auto_after_circuit_break_returns_unprefixed_reason():
+async def test_auto_after_circuit_break_returns_unprefixed_reason(store, bus):
     """I-2 fix: don't double-prefix 'circuit_break: ' in BackendChoice.reason."""
-    orch = await _make_orchestrator(_sample_spec("auto"), _which_claude)
+    orch = await _make_orchestrator(store, bus, _sample_spec("auto"), _which_claude)
     orch._record_subagent_failure("usage_limit_reached")
     choice = orch._resolver_pick(_sample_task())
     assert choice.kind is None

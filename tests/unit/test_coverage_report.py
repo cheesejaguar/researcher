@@ -30,8 +30,7 @@ from researcher.storage.store import (
     StoreMetrics,
     _classify_source,
 )
-from tests.stubs.bus import StubEventBus
-from tests.stubs.store import StubKnowledgeStore
+from tests.support import make_resolver
 
 RUN_ID = "run-coverage"
 
@@ -114,71 +113,15 @@ def test_classify_source_categories():
     assert _classify_source("") == "other"
 
 
-# ---------- StubKnowledgeStore.snapshot_coverage ----------
+# ---------- DuckDBKnowledgeStore.snapshot_coverage ----------
 
 
 @pytest.mark.asyncio
-async def test_stub_snapshot_coverage_empty():
-    store = StubKnowledgeStore()
-    await store.open()
+async def test_duckdb_snapshot_coverage_empty(store):
     snap = await store.snapshot_coverage()
     assert isinstance(snap, CoverageSnapshot)
     assert snap.fields_below_confidence == {}
     assert snap.source_type_breakdown == {}
-
-
-@pytest.mark.asyncio
-async def test_stub_snapshot_coverage_counts_low_confidence_fields():
-    store = StubKnowledgeStore()
-    await store.open()
-    # Three cells on the same field name; only the last two are < 0.5.
-    await store.upsert_entity(
-        "War",
-        "WWI",
-        {"start_year": _cell(1914, conf=0.9)},
-    )
-    await store.upsert_entity(
-        "War",
-        "WWII",
-        {"start_year": _cell(1939, conf=0.4)},
-    )
-    await store.upsert_entity(
-        "War",
-        "Korea",
-        {"start_year": _cell(1950, conf=0.3)},
-    )
-    snap = await store.snapshot_coverage(confidence_threshold=0.5)
-    assert snap.fields_below_confidence == {"start_year": 2}
-
-
-@pytest.mark.asyncio
-async def test_stub_snapshot_coverage_classifies_sources():
-    store = StubKnowledgeStore()
-    await store.open()
-    urls = [
-        "http://a",
-        "https://b",
-        "file:///c",
-        "native://d",
-        "stub://e",
-        "ftp://f",
-    ]
-    for i, url in enumerate(urls):
-        await store.record_provenance(
-            f"prov-{i}",
-            {"entity_id": f"e-{i}", "field": "x", "url": url},
-        )
-    snap = await store.snapshot_coverage()
-    assert snap.source_type_breakdown == {
-        "http": 2,
-        "file": 1,
-        "native": 1,
-        "stub": 1,
-        "other": 1,
-    }
-
-
-# ---------- DuckDBKnowledgeStore.snapshot_coverage ----------
 
 
 class _WarEntity(BaseModel):
@@ -299,7 +242,13 @@ def test_coverage_report_recommendations_capped_at_three():
         source_type_breakdown={},
     )
     seeds = Orchestrator._recommend_next_seeds(metrics, snap)
-    assert len(seeds) <= 3
+    # Sparse types fill the budget first (sorted by count, then name), so
+    # the conflict and low-confidence suggestions are crowded out.
+    assert seeds == [
+        "expand coverage of Person",
+        "expand coverage of Place",
+        "expand coverage of War",
+    ]
 
 
 # ---------- Orchestrator integration ----------
@@ -333,25 +282,22 @@ async def _noop_conflict(_entity_id, _cells):
     return None
 
 
-async def _make_orch(store, *, lacks_snapshot: bool = False):
+async def _make_orch(store, bus):
     from researcher.backends.resolver import BackendResolver
     from researcher.budget import Budget
     from researcher.scheduler import Scheduler
     from researcher.storage.writer import FactWriter
     from tests.stubs.cli_runner import StubCliRunner, make_wars_discover_result
     from tests.stubs.llm import StubLLMClient
-    from tests.stubs.resolver import StubEntityResolver
 
     def _which_claude(cmd: str) -> str | None:
         return "/usr/local/bin/claude" if cmd == "claude" else None
 
     spec = _sample_spec_for_orch()
-    bus = StubEventBus()
     llm = StubLLMClient()
-    resolver = StubEntityResolver()
     writer = FactWriter(
         store=store,
-        resolver=resolver,
+        resolver=make_resolver(store),
         entity_schema={
             "entity_type": "War",
             "fields": [{"name": "name", "type": "str", "required": True}],
@@ -382,10 +328,8 @@ async def _make_orch(store, *, lacks_snapshot: bool = False):
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_emits_coverage_report_after_cycle_end():
-    store = StubKnowledgeStore()
-    await store.open()
-    orch, bus = await _make_orch(store)
+async def test_orchestrator_emits_coverage_report_after_cycle_end(store, bus):
+    orch, bus = await _make_orch(store, bus)
 
     await orch.run()
 
@@ -401,44 +345,31 @@ async def test_orchestrator_emits_coverage_report_after_cycle_end():
     assert cov_evt.payload.confidence_threshold == 0.5
 
 
-class _StoreWithoutSnapshotCoverage(StubKnowledgeStore):
-    """Test store that intentionally lacks snapshot_coverage."""
+class _StoreWithoutSnapshotCoverage(DuckDBKnowledgeStore):
+    """Real store with snapshot_coverage shadowed out, standing in for a
+    KnowledgeStore implementation that predates the method."""
 
-    # Override at the class level so hasattr() returns False.
     snapshot_coverage = None  # type: ignore[assignment]
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_skips_coverage_report_when_store_lacks_method():
-    # Build a tiny store that does NOT define snapshot_coverage at all.
-    class _BareStore(StubKnowledgeStore):
-        pass
-
-    # Surgically remove snapshot_coverage from this instance.
-    store = _BareStore()
+async def test_orchestrator_skips_coverage_report_when_store_lacks_method(tmp_path: Path, bus):
+    store = _StoreWithoutSnapshotCoverage(db_path=tmp_path / "bare.duckdb")
     await store.open()
-    # Make hasattr return False for the instance.
-    object.__setattr__(store, "snapshot_coverage", None)
+    try:
+        orch, bus = await _make_orch(store, bus)
+        await orch.run()
+    finally:
+        await store.close()
 
-    orch, bus = await _make_orch(store)
-
-    # Patch hasattr indirectly: orchestrator gates on
-    # ``hasattr(self._store, "snapshot_coverage")`` AND callable. We
-    # additionally guard inside the helper. The simplest way to make this
-    # test deterministic is to monkey-patch the helper's gate by removing
-    # the attribute from the instance dict and shadowing the bound method.
-    # In practice, the orchestrator's hasattr-on-callable check will treat
-    # ``None`` as a missing method.
-    await orch.run()
-
+    # The cycle still ran; only the coverage report was skipped.
+    assert any(isinstance(e, CycleEnd) for e in bus.events)
     coverage = [e for e in bus.events if isinstance(e, CoverageReport)]
     assert coverage == []
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_uses_custom_confidence_threshold():
-    store = StubKnowledgeStore()
-    await store.open()
+async def test_orchestrator_uses_custom_confidence_threshold(store, bus):
 
     from researcher.backends.resolver import BackendResolver
     from researcher.budget import Budget
@@ -446,16 +377,14 @@ async def test_orchestrator_uses_custom_confidence_threshold():
     from researcher.storage.writer import FactWriter
     from tests.stubs.cli_runner import StubCliRunner, make_wars_discover_result
     from tests.stubs.llm import StubLLMClient
-    from tests.stubs.resolver import StubEntityResolver
 
     def _which_claude(cmd: str) -> str | None:
         return "/usr/local/bin/claude" if cmd == "claude" else None
 
     spec = _sample_spec_for_orch()
-    bus = StubEventBus()
     writer = FactWriter(
         store=store,
-        resolver=StubEntityResolver(),
+        resolver=make_resolver(store),
         entity_schema={
             "entity_type": "War",
             "fields": [{"name": "name", "type": "str", "required": True}],
