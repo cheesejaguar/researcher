@@ -85,9 +85,7 @@ class DiskCache:
         }
         # Evict oldest if over cap.
         while len(self._entries) > self._max_entries:
-            oldest_key = min(
-                self._entries, key=lambda k: self._entries[k].get("cached_at", 0.0)
-            )
+            oldest_key = min(self._entries, key=lambda k: self._entries[k].get("cached_at", 0.0))
             del self._entries[oldest_key]
             self._evictions += 1
         self._save()
@@ -96,7 +94,8 @@ class DiskCache:
         """Remove expired entries; return count pruned."""
         now = time.time()
         to_drop = [
-            k for k, e in self._entries.items()
+            k
+            for k, e in self._entries.items()
             if e.get("expires_at", 0.0) > 0 and now >= e.get("expires_at", 0.0)
         ]
         for k in to_drop:

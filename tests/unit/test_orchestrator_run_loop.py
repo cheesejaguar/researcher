@@ -128,9 +128,7 @@ async def test_run_dispatches_subagent_and_submits_claims_to_writer(store, bus):
     # The fixture has 4 extractions for one entity; all reach the writer and
     # land in the real store.
     assert writer.metrics["submitted"] == 4
-    rows = await store.query(
-        "SELECT name FROM entities WHERE entity_type = ?", ("War",)
-    )
+    rows = await store.query("SELECT name FROM entities WHERE entity_type = ?", ("War",))
     assert [r["name"] for r in rows] == ["World War II"]
     # No exceptions propagated; the single-cycle cap ends the run.
     assert reason == StopReason.PLATEAU
@@ -180,9 +178,7 @@ async def test_run_native_path_raises_not_implemented(store, bus):
 async def test_run_records_subagent_failure_and_circuit_breaks(store, bus):
     """After 3 spawn/timeout failures in one cycle, the resolver is circuit-broken."""
     runner = StubCliRunner()
-    runner.add_response_for_any(
-        CliResult(ok=False, error="timeout", wall_ms=100, exit_code=None)
-    )
+    runner.add_response_for_any(CliResult(ok=False, error="timeout", wall_ms=100, exit_code=None))
     # Need enough tasks to trigger the circuit break (3+ in one cycle).
     spec = _sample_spec(policy="auto")
     # Force multiple tasks by expanding the seed list.

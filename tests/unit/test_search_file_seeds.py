@@ -32,9 +32,7 @@ async def test_unknown_query_returns_empty() -> None:
 
 async def test_respects_max_results() -> None:
     provider = FileSeedsProvider(
-        seeds={
-            "q": [{"title": f"t{i}", "url": f"https://x/{i}"} for i in range(10)]
-        }
+        seeds={"q": [{"title": f"t{i}", "url": f"https://x/{i}"} for i in range(10)]}
     )
     results = await provider.search("q", max_results=3)
     assert len(results) == 3

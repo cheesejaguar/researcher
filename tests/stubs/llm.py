@@ -28,8 +28,10 @@ class StubLLMClient(LLMClient):
                 self._cassettes.update(json.loads(p.read_text()))
         self.calls: list[dict] = []
 
-    def content_hash(self, messages: list[dict], tier: LLMTier) -> str:
-        payload = json.dumps({"tier": tier.value, "messages": messages}, sort_keys=True)
+    def content_hash(self, messages: list[dict], tier: LLMTier, model: str | None = None) -> str:
+        payload = json.dumps(
+            {"tier": tier.value, "model": model, "messages": messages}, sort_keys=True
+        )
         return hashlib.sha256(payload.encode()).hexdigest()
 
     async def complete(
@@ -39,8 +41,9 @@ class StubLLMClient(LLMClient):
         task_id: str,
         temperature: float = 0.2,
         max_tokens: int | None = None,
+        model: str | None = None,
     ) -> LLMResponse:
-        key = self.content_hash(messages, tier)
+        key = self.content_hash(messages, tier, model=model)
         self.calls.append(
             {
                 "kind": "complete",
@@ -48,6 +51,7 @@ class StubLLMClient(LLMClient):
                 "task_id": task_id,
                 "hash": key,
                 "messages": messages,
+                "model": model,
             }
         )
         if key in self._cassettes:
@@ -81,8 +85,9 @@ class StubLLMClient(LLMClient):
         task_id: str,
         temperature: float = 0.0,
         schema_retry: bool = True,
+        model: str | None = None,
     ) -> T:
-        key = self.content_hash(messages, tier)
+        key = self.content_hash(messages, tier, model=model)
         self.calls.append(
             {
                 "kind": "structured",
@@ -90,6 +95,7 @@ class StubLLMClient(LLMClient):
                 "task_id": task_id,
                 "hash": key,
                 "messages": messages,
+                "model": model,
             }
         )
         if key in self._cassettes:

@@ -213,9 +213,7 @@ async def test_record_and_get_provenance(tmp_path: Path):
         )
         # Re-recording the same id replaces the row rather than duplicating it.
         await store.record_provenance("prov-1", {"url": "https://example.org"})
-        rows = await store.query(
-            "SELECT provenance_id, data_json FROM provenance"
-        )
+        rows = await store.query("SELECT provenance_id, data_json FROM provenance")
         assert len(rows) == 1
         assert rows[0]["provenance_id"] == "prov-1"
         assert json.loads(rows[0]["data_json"]) == {"url": "https://example.org"}

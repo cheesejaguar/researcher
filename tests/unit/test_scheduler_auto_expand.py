@@ -46,9 +46,7 @@ def _spec(max_entities_per_cycle: int = 60, seeds: list[str] | None = None) -> R
 
 
 def _cell(value: Any) -> FieldCell:
-    return FieldCell(
-        value=value, confidence=0.9, provenance_ids=[], updated_at=datetime.now(UTC)
-    )
+    return FieldCell(value=value, confidence=0.9, provenance_ids=[], updated_at=datetime.now(UTC))
 
 
 async def _seed_sparse(store: DuckDBKnowledgeStore, names: list[str]) -> list[str]:
@@ -170,8 +168,10 @@ async def test_enqueued_expand_tasks_carry_budget_and_deadline(store) -> None:
 
     assert len(batch) == 2
     for task in batch:
-        # budget_usd / n_sparse / 10
-        assert task.budget_usd == pytest.approx(spec.budget_usd / 2 / 10)
+        # budget_usd / n_sparse / 10, capped at 2% of the run budget.
+        assert task.budget_usd == pytest.approx(
+            min(spec.budget_usd / 2 / 10, spec.budget_usd * 0.02)
+        )
         assert task.deadline_ts >= before + timedelta(seconds=spec.wall_limit_s)
         assert task.kind == TaskKind.EXPAND
         assert task.spec_ref == "test"

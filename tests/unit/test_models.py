@@ -17,6 +17,7 @@ from researcher.models import (
 
 # ---------- Enums ----------
 
+
 def test_agent_state_values():
     assert [s.value for s in AgentState] == [
         "idle",
@@ -29,7 +30,13 @@ def test_agent_state_values():
 
 
 def test_task_kind_values():
-    assert [k.value for k in TaskKind] == ["discover", "expand", "verify", "enrich"]
+    assert [k.value for k in TaskKind] == [
+        "discover",
+        "expand",
+        "verify",
+        "enrich",
+        "critic",
+    ]
 
 
 def test_llm_tier_values():
@@ -37,6 +44,7 @@ def test_llm_tier_values():
 
 
 # ---------- Provenance ----------
+
 
 def _sample_provenance() -> Provenance:
     return Provenance(
@@ -71,6 +79,7 @@ def test_provenance_requires_span_id():
 
 # ---------- Task ----------
 
+
 def test_task_defaults():
     deadline = datetime(2026, 4, 8, 13, 0, tzinfo=UTC)
     t = Task(
@@ -98,6 +107,7 @@ def test_task_ids_are_unique():
 
 
 # ---------- FactClaim ----------
+
 
 def test_fact_claim_confidence_bounds():
     with pytest.raises(ValidationError):
@@ -160,6 +170,7 @@ def test_fact_claim_roundtrip():
 
 # ---------- AgentResult ----------
 
+
 def test_agent_result_defaults():
     r = AgentResult(task_id="task-1", agent_id="agent-1", state=AgentState.DONE)
     assert r.claims == []
@@ -183,6 +194,7 @@ def test_provenance_passage_span_fields_default_none():
 
 def test_provenance_passage_span_fields_set():
     from datetime import UTC, datetime
+
     p = Provenance(
         url="https://example.com",
         fetched_at=datetime.now(UTC),

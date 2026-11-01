@@ -42,6 +42,7 @@ def _ts() -> datetime:
 
 # ---------- Event union ----------
 
+
 def test_cycle_start_has_type_discriminator():
     e = CycleStart(
         seq=0,
@@ -120,6 +121,7 @@ def test_competitor_gap_events_parse():
 
 # ---------- EventBus: JSONL fsync ----------
 
+
 @pytest.mark.asyncio
 async def test_emit_writes_jsonl(tmp_path: Path):
     bus = EventBus(jsonl_path=tmp_path / "events.jsonl")
@@ -127,13 +129,17 @@ async def test_emit_writes_jsonl(tmp_path: Path):
     try:
         await bus.emit(
             CycleStart(
-                seq=0, ts=_ts(), run_id=RUN_ID,
+                seq=0,
+                ts=_ts(),
+                run_id=RUN_ID,
                 payload=CycleStartPayload(cycle=1, pending_tasks=3),
             )
         )
         await bus.emit(
             AgentLog(
-                seq=0, ts=_ts(), run_id=RUN_ID,
+                seq=0,
+                ts=_ts(),
+                run_id=RUN_ID,
                 payload=AgentLogPayload(agent_id="a1", level="info", msg="hi"),
             )
         )
@@ -157,7 +163,9 @@ async def test_emit_assigns_monotonic_seq(tmp_path: Path):
         for i in range(5):
             await bus.emit(
                 AgentLog(
-                    seq=0, ts=_ts(), run_id=RUN_ID,
+                    seq=0,
+                    ts=_ts(),
+                    run_id=RUN_ID,
                     payload=AgentLogPayload(agent_id="a", level="info", msg=f"{i}"),
                 )
             )
@@ -171,6 +179,7 @@ async def test_emit_assigns_monotonic_seq(tmp_path: Path):
 
 # ---------- EventBus: socket queue backpressure ----------
 
+
 @pytest.mark.asyncio
 async def test_socket_queue_drops_oldest_when_full(tmp_path: Path):
     # Max queue = 3. Emit 10. Expect 7 drops and the queue to contain the LAST 3.
@@ -180,7 +189,9 @@ async def test_socket_queue_drops_oldest_when_full(tmp_path: Path):
         for i in range(10):
             await bus.emit(
                 AgentLog(
-                    seq=0, ts=_ts(), run_id=RUN_ID,
+                    seq=0,
+                    ts=_ts(),
+                    run_id=RUN_ID,
                     payload=AgentLogPayload(agent_id="a", level="info", msg=f"{i}"),
                 )
             )
@@ -206,7 +217,9 @@ async def test_jsonl_is_authoritative_even_when_socket_overflows(tmp_path: Path)
         for i in range(10):
             await bus.emit(
                 AgentLog(
-                    seq=0, ts=_ts(), run_id=RUN_ID,
+                    seq=0,
+                    ts=_ts(),
+                    run_id=RUN_ID,
                     payload=AgentLogPayload(agent_id="a", level="info", msg=f"{i}"),
                 )
             )
@@ -226,9 +239,7 @@ async def test_event_socket_server_broadcasts_json_lines(tmp_path: Path):
     await bus.start()
     await server.start()
     try:
-        reader, writer = await asyncio.open_unix_connection(
-            str(short_dir / "events.sock")
-        )
+        reader, writer = await asyncio.open_unix_connection(str(short_dir / "events.sock"))
         await bus.emit(
             CycleStart(
                 seq=0,
@@ -258,11 +269,14 @@ async def test_emit_never_blocks_core(tmp_path: Path):
     bus = EventBus(jsonl_path=tmp_path / "events.jsonl", max_queue=1)
     await bus.start()
     try:
+
         async def burst():
             for i in range(500):
                 await bus.emit(
                     CostUpdate(
-                        seq=0, ts=_ts(), run_id=RUN_ID,
+                        seq=0,
+                        ts=_ts(),
+                        run_id=RUN_ID,
                         payload=CostUpdatePayload(
                             cost_usd_total=0.01 * i,
                             tokens_in_total=100 * i,
@@ -270,6 +284,7 @@ async def test_emit_never_blocks_core(tmp_path: Path):
                         ),
                     )
                 )
+
         # If emit blocks, this will time out.
         await asyncio.wait_for(burst(), timeout=2.0)
         assert bus.dropped_socket_events == 499
@@ -285,7 +300,9 @@ async def test_run_complete_event(tmp_path: Path):
     try:
         await bus.emit(
             RunComplete(
-                seq=0, ts=_ts(), run_id=RUN_ID,
+                seq=0,
+                ts=_ts(),
+                run_id=RUN_ID,
                 payload=RunCompletePayload(
                     reason="plateau",
                     entities=120,

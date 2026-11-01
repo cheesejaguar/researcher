@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 from uuid import uuid4
 
+from pydantic import BaseModel
+
 from researcher.agents.native_deps import NativeAgentDeps
 from researcher.agents.subagent import SubagentResearcher
 from researcher.backends.cli_runner import CliRunner
@@ -56,7 +58,7 @@ from researcher.events import (
 )
 from researcher.interrupts import InterruptHandler
 from researcher.llm.client import LLMClient
-from researcher.models import AgentResult, AgentState, Task, TaskKind
+from researcher.models import AgentResult, AgentState, LLMTier, Task, TaskKind
 from researcher.scheduler import Scheduler
 from researcher.skills.registry import SkillRegistry
 from researcher.spec import RunSpec
@@ -72,6 +74,12 @@ class StopReason(str, Enum):
     ERROR = "error"
     NO_TASKS = "no_tasks"
     SUBAGENT_CAP = "subagent_cap"
+
+
+class _CouncilVoteResponse(BaseModel):
+    vote: Any = None
+    confidence: float = 0.0
+    rationale: str = ""
 
 
 class Orchestrator:
@@ -123,9 +131,7 @@ class Orchestrator:
     def set_backend_resolver(self, resolver: BackendResolver) -> None:
         self._backend_resolver = resolver
 
-    def set_cli_runner_factory(
-        self, factory: Callable[[CliKind], CliRunner]
-    ) -> None:
+    def set_cli_runner_factory(self, factory: Callable[[CliKind], CliRunner]) -> None:
         self._cli_runner_factory = factory
 
     def set_difficulty_gate(self, gate: Any) -> None:
@@ -151,9 +157,7 @@ class Orchestrator:
         """
         self._interrupt_handler = handler
 
-    async def _maybe_interrupt(
-        self, point: str, context: dict[str, Any]
-    ) -> bool:
+    async def _maybe_interrupt(self, point: str, context: dict[str, Any]) -> bool:
         """Consult the interrupt handler at a named point.
 
         Returns ``True`` if the run should continue, ``False`` to abort.
@@ -170,9 +174,7 @@ class Orchestrator:
                 seq=0,
                 ts=datetime.now(UTC),
                 run_id=self._run_id,
-                payload=InterruptRequestedPayload(
-                    point=point, context=context
-                ),
+                payload=InterruptRequestedPayload(point=point, context=context),
             )
         )
         try:
@@ -180,9 +182,7 @@ class Orchestrator:
         except Exception:
             decision_str = "continue"
         else:
-            decision_str = (
-                decision.value if hasattr(decision, "value") else str(decision)
-            )
+            decision_str = decision.value if hasattr(decision, "value") else str(decision)
         await self._bus.emit(
             InterruptResolved(
                 seq=0,
@@ -291,10 +291,10 @@ class Orchestrator:
                 saw_real_exception = False
                 to_revise: list[Task] = []
                 for t, r in zip(batch, results, strict=False):
-                    if isinstance(r, Exception):
+                    if isinstance(r, BaseException):
                         saw_real_exception = True
                         continue
-                    await self._record_result_cost(r)
+                    await self._record_result_cost(r, task=t)
                     # Submit successful claims to the writer.
                     for claim in r.claims:
                         try:
@@ -305,9 +305,7 @@ class Orchestrator:
                         # disrupt the primary path.
                         if self._obsidian_writer is not None:
                             try:
-                                await self._obsidian_writer.on_fact(
-                                    claim, run_id=self._run_id
-                                )
+                                await self._obsidian_writer.on_fact(claim, run_id=self._run_id)
                             except Exception:
                                 pass
                     # v1.2: collect tasks tagged for bounded conditional
@@ -319,14 +317,12 @@ class Orchestrator:
                         and t.attempt == 0
                     ):
                         self._budget.record_revision()
-                        to_revise.append(
-                            t.model_copy(update={"attempt": t.attempt + 1})
-                        )
+                        to_revise.append(t.model_copy(update={"attempt": t.attempt + 1}))
                     # Record failures for circuit-break counter + detect subagent_cap.
                     if r.state == AgentState.FAILED and r.error:
                         if r.error == "subagent_cap":
                             subagent_cap_hit = True
-                        else:
+                        elif not r.error.startswith("budget_gated"):
                             self._record_subagent_failure(r.error)
                     await self._scheduler.mark_done(t.id, r)
 
@@ -343,10 +339,10 @@ class Orchestrator:
                         *(self._spawn_agent(t) for t in to_revise),
                         return_exceptions=True,
                     )
-                    for r in revision_results:
-                        if isinstance(r, Exception):
+                    for revised_task, r in zip(to_revise, revision_results, strict=False):
+                        if isinstance(r, BaseException):
                             continue
-                        await self._record_result_cost(r)
+                        await self._record_result_cost(r, task=revised_task)
                         for claim in r.claims:
                             try:
                                 await self._writer.submit(claim)
@@ -354,15 +350,13 @@ class Orchestrator:
                                 pass
                             if self._obsidian_writer is not None:
                                 try:
-                                    await self._obsidian_writer.on_fact(
-                                        claim, run_id=self._run_id
-                                    )
+                                    await self._obsidian_writer.on_fact(claim, run_id=self._run_id)
                                 except Exception:
                                     pass
                         if r.state == AgentState.FAILED and r.error:
                             if r.error == "subagent_cap":
                                 subagent_cap_hit = True
-                            else:
+                            elif not r.error.startswith("budget_gated"):
                                 self._record_subagent_failure(r.error)
 
                 # Serial reduce: wait for this cycle's claims to process.
@@ -465,6 +459,32 @@ class Orchestrator:
         for backwards compatibility.
         """
         async with self._sem:
+            # Hard budget sub-caps: total remaining, cumulative per-task, and
+            # cumulative per-entity. Gated tasks are reported but do not count
+            # toward the subagent-failure circuit breaker.
+            if task.budget_usd > self._budget.remaining():
+                return AgentResult(
+                    task_id=task.id,
+                    agent_id=f"gated-{task.id[:8]}",
+                    state=AgentState.FAILED,
+                    error="budget_gated_total",
+                )
+            if not self._budget.allows_task_cumulative(task.id, task.budget_usd):
+                return AgentResult(
+                    task_id=task.id,
+                    agent_id=f"gated-{task.id[:8]}",
+                    state=AgentState.FAILED,
+                    error="budget_gated_task",
+                )
+            if task.target_entity_id and not self._budget.allows_entity_cumulative(
+                task.target_entity_id, task.budget_usd
+            ):
+                return AgentResult(
+                    task_id=task.id,
+                    agent_id=f"gated-{task.id[:8]}",
+                    state=AgentState.FAILED,
+                    error="budget_gated_entity",
+                )
             # v1.2: difficulty-aware compute gate (opt-in).
             # Consult the gate before dispatching; skip tasks that exceed
             # their difficulty-scaled per-task cap. Fail open on gate errors.
@@ -498,13 +518,21 @@ class Orchestrator:
                 )
 
             runner = self._cli_runner_factory(choice.kind)
-            entity_type_dict = {"entity_type": "Entity", "fields": []}
+            entity_type_dict: dict[str, Any] = {
+                "entity_type": "Entity",
+                "fields": [],
+            }
             if self._spec.entities:
                 primary = self._spec.entities[0]
                 entity_type_dict = {
                     "entity_type": primary.name,
                     "fields": [
-                        {"name": f.name, "type": f.type, "required": f.required, "enum": list(f.enum)}
+                        {
+                            "name": f.name,
+                            "type": f.type,
+                            "required": f.required,
+                            "enum": list(f.enum),
+                        }
                         for f in primary.fields
                     ],
                 }
@@ -545,10 +573,15 @@ class Orchestrator:
             )
         )
 
-    async def _record_result_cost(self, result: AgentResult) -> None:
+    async def _record_result_cost(self, result: AgentResult, task: Optional[Task] = None) -> None:
         if result.cost_usd <= 0:
             return
-        self._budget.spend(float(result.cost_usd))
+        usd = float(result.cost_usd)
+        self._budget.spend(usd)
+        if task is not None:
+            self._budget.spend_for_task(task.id, usd)
+            if task.target_entity_id:
+                self._budget.spend_for_entity(task.target_entity_id, usd)
         await self._emit_budget_updates()
 
     async def _sync_budget_from_metrics(self, metrics: StoreMetrics) -> None:
@@ -610,7 +643,10 @@ class Orchestrator:
         from researcher.agents.expand import ExpandAgent
         from researcher.agents.verify import VerifyAgent
 
-        entity_schema_dict = {"entity_type": "Entity", "fields": []}
+        entity_schema_dict: dict[str, Any] = {
+            "entity_type": "Entity",
+            "fields": [],
+        }
         if self._spec.entities:
             primary = self._spec.entities[0]
             entity_schema_dict = {
@@ -621,7 +657,7 @@ class Orchestrator:
                 ],
             }
 
-        common_kwargs = dict(
+        common_kwargs: dict[str, Any] = dict(
             agent_id=f"native-{task.id[:8]}",
             llm=self._llm,
             store=self._store,
@@ -632,19 +668,27 @@ class Orchestrator:
         )
 
         if task.kind == TaskKind.DISCOVER:
-            agent: SubagentResearcher | DiscoverAgent | ExpandAgent | VerifyAgent | EnrichAgent | CriticAgent = (
-                DiscoverAgent(**common_kwargs, goal=self._spec.goal)
-            )
+            agent: (
+                SubagentResearcher
+                | DiscoverAgent
+                | ExpandAgent
+                | VerifyAgent
+                | EnrichAgent
+                | CriticAgent
+            ) = DiscoverAgent(**common_kwargs, goal=self._spec.goal)
         elif task.kind == TaskKind.EXPAND:
             agent = ExpandAgent(**common_kwargs, goal=self._spec.goal)
         elif task.kind == TaskKind.VERIFY:
             agent = VerifyAgent(**common_kwargs)
         elif task.kind == TaskKind.ENRICH:
             agent = EnrichAgent(**common_kwargs, goal=self._spec.goal)
+        elif task.kind == TaskKind.CRITIC:
+            suggestions_path = Path("skills") / "_suggestions.md"
+            if self._db_path:
+                suggestions_path = Path(self._db_path).parent / "skill_suggestions.md"
+            agent = CriticAgent(**common_kwargs, suggestions_path=suggestions_path)
         else:
-            raise NotImplementedError(
-                f"unsupported TaskKind for native path: {task.kind}"
-            )
+            raise NotImplementedError(f"unsupported TaskKind for native path: {task.kind}")
         return await agent.run(task)
 
     async def _emit_cycle_start(self, pending: int) -> None:
@@ -684,9 +728,7 @@ class Orchestrator:
         if snap_fn is None or not callable(snap_fn):
             return
         try:
-            snapshot = await snap_fn(
-                confidence_threshold=self._coverage_confidence_threshold
-            )
+            snapshot = await snap_fn(confidence_threshold=self._coverage_confidence_threshold)
         except Exception:
             return
         try:
@@ -716,9 +758,7 @@ class Orchestrator:
         )
 
     @staticmethod
-    def _recommend_next_seeds(
-        metrics: StoreMetrics, snapshot: CoverageSnapshot
-    ) -> list[str]:
+    def _recommend_next_seeds(metrics: StoreMetrics, snapshot: CoverageSnapshot) -> list[str]:
         """Heuristic v1 recommender: return up to 3 short suggestion strings.
 
         Pure function (no I/O). The TUI / external tools render these as
@@ -769,9 +809,7 @@ class Orchestrator:
                 "budget": self._budget.serialize(),
                 "cycle": self._cycle,
                 "started_at": (
-                    self._started_at.isoformat()
-                    if self._started_at is not None
-                    else None
+                    self._started_at.isoformat() if self._started_at is not None else None
                 ),
             }
             await self._store.save_checkpoint(  # type: ignore[attr-defined]
@@ -795,7 +833,8 @@ class Orchestrator:
             metrics = None
         else:
             try:
-                await self._sync_budget_from_metrics(metrics)
+                if metrics is not None:
+                    await self._sync_budget_from_metrics(metrics)
             except Exception:
                 pass
 
@@ -812,9 +851,7 @@ class Orchestrator:
             "entities_by_type": dict(metrics.by_type) if metrics else {},
             "fields_filled_pct": metrics.fields_filled_pct if metrics else 0.0,
             "conflicts_open": metrics.conflicts_open if metrics else 0,
-            "cost_usd": (
-                metrics.cost_usd_total if metrics else self._budget.total_spent()
-            ),
+            "cost_usd": (metrics.cost_usd_total if metrics else self._budget.total_spent()),
             "budget_spent_usd": self._budget.total_spent(),
             "wall_s": wall_s,
             "subagent_calls_total": self._budget.subagent_calls_total,
@@ -862,11 +899,7 @@ class Orchestrator:
             return 0
         models = list(getattr(verification, "models", []) or [])
         if not models:
-            models = [
-                self._spec.models.get("fast")
-                or self._spec.models.get("smart")
-                or "council"
-            ]
+            models = [self._spec.models.get("fast") or self._spec.models.get("smart") or "council"]
         threshold = float(getattr(verification, "confidence_threshold", 0.65))
         required = {
             f.name
@@ -895,21 +928,54 @@ class Orchestrator:
             except Exception:
                 pass
             for model in models:
-                confidence = float(row.get("confidence") or 0.0)
-                disagreement = confidence < threshold
+                stored_confidence = float(row.get("confidence") or 0.0)
+                council_messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an independent verification council "
+                            "member. Evaluate the field value on its merits. "
+                            "Do not assume any other reviewer's conclusion."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Entity type: {self._spec.entities[0].name}\n"
+                            f"Field: {row.get('field_name')}\n"
+                            f"Stored value: {value!r}\n"
+                            f"Stored confidence: {stored_confidence:.3f}\n\n"
+                            "Return your independently chosen `vote`, a "
+                            "`confidence` in [0, 1], and a short `rationale`."
+                        ),
+                    },
+                ]
+                vote_value: Any = value
+                confidence = stored_confidence
+                rationale = "council call unavailable"
+                try:
+                    response = await self._llm.complete_structured(
+                        messages=council_messages,
+                        schema=_CouncilVoteResponse,
+                        tier=LLMTier.SMART,
+                        task_id=f"council-{row.get('entity_id')}-{row.get('field_name')}",
+                        model=model,
+                    )
+                    vote_value = response.vote
+                    confidence = max(0.0, min(1.0, float(response.confidence)))
+                    rationale = response.rationale
+                except Exception as exc:
+                    rationale = f"council call failed: {type(exc).__name__}"
+                disagreement = vote_value != value or confidence < threshold
                 vote = {
                     "vote_id": uuid4().hex,
                     "run_id": self._run_id,
                     "entity_id": row.get("entity_id"),
                     "field_name": row.get("field_name"),
                     "model": model,
-                    "vote": value,
+                    "vote": vote_value,
                     "confidence": confidence,
-                    "rationale": (
-                        "low-confidence field queued for review"
-                        if disagreement
-                        else "required field accepted"
-                    ),
+                    "rationale": rationale,
                 }
                 await self._store.record_verification_vote(vote)
                 await self._bus.emit(
@@ -921,7 +987,7 @@ class Orchestrator:
                             entity_id=vote["entity_id"],
                             field=vote["field_name"],
                             model=model,
-                            vote=value,
+                            vote=vote_value,
                             confidence=confidence,
                             disagreement=disagreement,
                         ),

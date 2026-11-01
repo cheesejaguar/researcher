@@ -4,8 +4,13 @@ from researcher.llm.client import LLMUsage
 from researcher.llm.cost_tracker import SimpleCostTracker
 
 
-def _usage(tokens_in: int = 10, tokens_out: int = 5, cost: float = 0.001,
-           model: str = "openrouter/hermes-3-8b", cache_hit: bool = False) -> LLMUsage:
+def _usage(
+    tokens_in: int = 10,
+    tokens_out: int = 5,
+    cost: float = 0.001,
+    model: str = "openrouter/hermes-3-8b",
+    cache_hit: bool = False,
+) -> LLMUsage:
     return LLMUsage(
         tokens_in=tokens_in,
         tokens_out=tokens_out,

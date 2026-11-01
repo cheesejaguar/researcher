@@ -61,6 +61,7 @@ class LLMClient(ABC):
         task_id: str,
         temperature: float = 0.2,
         max_tokens: int | None = None,
+        model: str | None = None,
     ) -> LLMResponse: ...
 
     @abstractmethod
@@ -72,8 +73,13 @@ class LLMClient(ABC):
         task_id: str,
         temperature: float = 0.0,
         schema_retry: bool = True,
+        model: str | None = None,
     ) -> T:
-        """Structured-output call. On validation failure, retries once iff schema_retry."""
+        """Structured-output call. On validation failure, retries once iff schema_retry.
+
+        ``model`` overrides the tier mapping for this call. Verification council
+        members use it to pin a specific model while sharing the same client.
+        """
         ...
 
     @abstractmethod
@@ -82,6 +88,6 @@ class LLMClient(ABC):
         ...
 
     @abstractmethod
-    def content_hash(self, messages: list[dict], tier: LLMTier) -> str:
+    def content_hash(self, messages: list[dict], tier: LLMTier, model: str | None = None) -> str:
         """Deterministic hash used as the cache key for prefix caching."""
         ...

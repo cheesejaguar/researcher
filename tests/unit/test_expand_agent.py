@@ -161,3 +161,52 @@ async def test_expand_partial_fields_only_claims_populated_ones(store, bus) -> N
     assert len(result.claims) == 1
     assert result.claims[0].field == "start_year"
     assert result.claims[0].value == 1914
+
+
+@pytest.mark.asyncio
+async def test_expand_uses_per_field_source_provenance(store, bus) -> None:
+    url_2 = "https://example.com/ww2"
+    url_1 = "https://example.com/ww1"
+    search = FileSeedsProvider(
+        seeds={
+            "World War II start_year end_year": [
+                {"title": "WW2", "url": url_2},
+                {"title": "WW1", "url": url_1},
+            ]
+        }
+    )
+    http = mock_http(
+        {
+            url_2: (200, "<html><body><p>WW2 ran 1939-1945.</p></body></html>"),
+            url_1: (200, "<html><body><p>WW1 ran 1914-1918.</p></body></html>"),
+        }
+    )
+    deps = NativeAgentDeps(
+        search=search, http=http, prompts=default_registry(), max_fetch_per_task=3
+    )
+    entity_id = await _seed_entity(store, "World War II")
+    llm = _llm_returning(
+        {
+            "start_year": 1939,
+            "end_year": 1945,
+            "field_sources": {"start_year": url_2, "end_year": url_1},
+        }
+    )
+
+    agent = ExpandAgent(
+        agent_id="native-exp",
+        llm=llm,
+        store=store,
+        emit=bus.emit,
+        run_id="run-x",
+        deps=deps,
+        entity_schema=_entity_schema(),
+        goal="Wars",
+    )
+    result = await agent.run(_make_task(entity_id, ["start_year", "end_year"]))
+
+    by_field = {c.field: c for c in result.claims}
+    assert by_field["start_year"].provenance.url == url_2
+    assert by_field["end_year"].provenance.url == url_1
+    assert "1939" in by_field["start_year"].provenance.snippet
+    assert "1914" in by_field["end_year"].provenance.snippet

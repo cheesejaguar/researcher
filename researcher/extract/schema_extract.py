@@ -65,11 +65,7 @@ async def extract_structured(
         "entity, return a JSON object matching the schema. If a field is not "
         "present in the text, omit it or use null."
     )
-    user = (
-        f"Entity: {entity_name}\n\n"
-        f"Text:\n{text}\n\n"
-        f"{instructions}".strip()
-    )
+    user = f"Entity: {entity_name}\n\nText:\n{text}\n\n{instructions}".strip()
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},

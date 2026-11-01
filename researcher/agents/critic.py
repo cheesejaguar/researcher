@@ -49,9 +49,7 @@ class CriticAgent(Agent):
         entity_schema: dict,
         suggestions_path: Path | str = Path("skills/_suggestions.md"),
     ) -> None:
-        super().__init__(
-            agent_id=agent_id, llm=llm, store=store, emit=emit, run_id=run_id
-        )
+        super().__init__(agent_id=agent_id, llm=llm, store=store, emit=emit, run_id=run_id)
         self._deps = deps
         self._entity_schema = entity_schema
         self._suggestions_path = Path(suggestions_path)

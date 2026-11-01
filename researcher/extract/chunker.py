@@ -34,9 +34,7 @@ def chunk_text(text: str, max_chars: int = 4000) -> list[Chunk]:
     headings = list(_HEADING_RE.finditer(text))
     chunks: list[Chunk] = []
     if headings:
-        starts: list[tuple[int, str]] = [
-            (m.start(), m.group(2).strip()) for m in headings
-        ]
+        starts: list[tuple[int, str]] = [(m.start(), m.group(2).strip()) for m in headings]
         # Add a synthetic intro start at 0 if the first heading isn't at position 0.
         if starts[0][0] > 0:
             prelude = text[: starts[0][0]]

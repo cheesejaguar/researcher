@@ -30,12 +30,19 @@ def evidence_rows(db_path: Path, run_id: str | None = None) -> list[dict[str, An
         }
         conflicts = {
             (row[0], row[1]): row[2]
-            for row in con.execute(
-                "SELECT entity_id, field, status FROM conflicts"
-            ).fetchall()
+            for row in con.execute("SELECT entity_id, field, status FROM conflicts").fetchall()
         }
         rows: list[dict[str, Any]] = []
-        for entity_id, entity_type, name, field, value_json, confidence, prov_json, last_seen_run in field_rows:
+        for (
+            entity_id,
+            entity_type,
+            name,
+            field,
+            value_json,
+            confidence,
+            prov_json,
+            last_seen_run,
+        ) in field_rows:
             provenance_ids = json.loads(prov_json or "[]")
             provenance_id = provenance_ids[0] if provenance_ids else ""
             pdata = prov.get(provenance_id, {})

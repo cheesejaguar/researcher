@@ -112,9 +112,7 @@ class KnowledgeStore(ABC):
         """Create tables + vss index from a dynamically-constructed Pydantic model."""
 
     @abstractmethod
-    async def upsert_entity(
-        self, entity_type: str, name: str, fields: dict[str, FieldCell]
-    ) -> str:
+    async def upsert_entity(self, entity_type: str, name: str, fields: dict[str, FieldCell]) -> str:
         """Create or update an entity row; returns its id."""
 
     @abstractmethod
@@ -141,9 +139,7 @@ class KnowledgeStore(ABC):
     @abstractmethod
     async def snapshot_metrics(self) -> StoreMetrics: ...
 
-    async def snapshot_coverage(
-        self, confidence_threshold: float = 0.5
-    ) -> CoverageSnapshot:
+    async def snapshot_coverage(self, confidence_threshold: float = 0.5) -> CoverageSnapshot:
         """Return a coverage snapshot (v1.2 #8).
 
         Default implementation returns an empty snapshot so older test

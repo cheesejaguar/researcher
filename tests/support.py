@@ -55,9 +55,7 @@ def mock_http(
 
         def handler(request: httpx.Request) -> httpx.Response:
             status, body = table.get(str(request.url), (404, ""))
-            return httpx.Response(
-                status, text=body, headers={"content-type": "text/html"}
-            )
+            return httpx.Response(status, text=body, headers={"content-type": "text/html"})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     return HttpFetcher(

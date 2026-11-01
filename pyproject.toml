@@ -57,9 +57,19 @@ markers = [
     "manual: tests that invoke real external tools (claude, codex) — excluded from CI, run locally only",
 ]
 
+[tool.mypy]
+python_version = "3.11"
+check_untyped_defs = true
+ignore_missing_imports = true
+warn_redundant_casts = true
+warn_unused_ignores = false
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Ruff formats Python snippets inside Markdown by dedenting them, which breaks
+# documentation examples that show class bodies. Keep prose docs out of scope.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]

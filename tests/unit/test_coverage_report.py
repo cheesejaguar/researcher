@@ -333,12 +333,8 @@ async def test_orchestrator_emits_coverage_report_after_cycle_end(store, bus):
 
     await orch.run()
 
-    cycle_ends = [
-        i for i, e in enumerate(bus.events) if isinstance(e, CycleEnd)
-    ]
-    coverage = [
-        i for i, e in enumerate(bus.events) if isinstance(e, CoverageReport)
-    ]
+    cycle_ends = [i for i, e in enumerate(bus.events) if isinstance(e, CycleEnd)]
+    coverage = [i for i, e in enumerate(bus.events) if isinstance(e, CoverageReport)]
     assert len(cycle_ends) >= 1
     assert len(coverage) >= 1
     # CoverageReport must come AFTER its corresponding CycleEnd.
@@ -357,9 +353,7 @@ class _StoreWithoutSnapshotCoverage(DuckDBKnowledgeStore):
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_skips_coverage_report_when_store_lacks_method(
-    tmp_path: Path, bus
-):
+async def test_orchestrator_skips_coverage_report_when_store_lacks_method(tmp_path: Path, bus):
     store = _StoreWithoutSnapshotCoverage(db_path=tmp_path / "bare.duckdb")
     await store.open()
     try:

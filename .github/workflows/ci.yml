@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,pdf]"
+      - name: Lint
+        run: ruff check .
+      - name: Format check
+        run: ruff format --check .
+      - name: Type check
+        run: mypy researcher
+      - name: Tests
+        run: pytest -q
+
+  tui:
+    name: TUI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: tui/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Tests
+        run: npm test
+      - name: Build
+        run: npm run build
+
+  wheel:
+    name: Wheel smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+      - name: Install wheel into a clean venv
+        run: |
+          python -m venv "$RUNNER_TEMP/smoke-venv"
+          "$RUNNER_TEMP/smoke-venv/bin/pip" install --upgrade pip
+          "$RUNNER_TEMP/smoke-venv/bin/pip" install dist/*.whl
+      - name: CLI smoke test from the installed wheel
+        run: |
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/smoke-venv/bin/researcher" --help
+          "$RUNNER_TEMP/smoke-venv/bin/researcher" run \
+            "$GITHUB_WORKSPACE/specs/wars.yaml" \
+            --offline \
+            --runs-dir "$RUNNER_TEMP/runs" \
+            --run-id wheel-smoke \
+            --no-tui \
+            --fast-startup
+          "$RUNNER_TEMP/smoke-venv/bin/researcher" inspect wheel-smoke \
+            --runs-dir "$RUNNER_TEMP/runs" \
+            --json

@@ -44,6 +44,11 @@ class Budget:
         self._subagent_calls_total = 0
         # v1.2: bounded conditional revisions counter.
         self._revisions_total: int = 0
+        # Per-task / per-entity actual spend, keyed by task id / entity id.
+        # These are what let the orchestrator enforce sub-caps on *cumulative*
+        # spend rather than only on a single task's estimate.
+        self._task_spent: dict[str, float] = {}
+        self._entity_spent: dict[str, float] = {}
 
     # ---------- Spend tracking ----------
 
@@ -96,9 +101,7 @@ class Budget:
         ceiling = self.remaining() * self._per_task_fraction
         return estimated_usd <= ceiling
 
-    def allows_task_with_difficulty(
-        self, estimated_usd: float, difficulty: int
-    ) -> bool:
+    def allows_task_with_difficulty(self, estimated_usd: float, difficulty: int) -> bool:
         """Return True if a task at the given difficulty is within budget.
 
         Easy tasks (``difficulty=1``) get a tighter cap (~1/5 of the normal
@@ -125,6 +128,41 @@ class Budget:
             return False
         ceiling = self._cap * self._per_entity_fraction
         return estimated_usd <= ceiling
+
+    def spend_for_task(self, task_id: str, usd: float) -> None:
+        if usd < 0:
+            raise ValueError("spend must be non-negative")
+        self._task_spent[task_id] = self._task_spent.get(task_id, 0.0) + usd
+
+    def spend_for_entity(self, entity_id: str, usd: float) -> None:
+        if usd < 0:
+            raise ValueError("spend must be non-negative")
+        self._entity_spent[entity_id] = self._entity_spent.get(entity_id, 0.0) + usd
+
+    def task_spent(self, task_id: str) -> float:
+        return self._task_spent.get(task_id, 0.0)
+
+    def entity_spent(self, entity_id: str) -> float:
+        return self._entity_spent.get(entity_id, 0.0)
+
+    def allows_task_cumulative(self, task_id: str, estimated_usd: float) -> bool:
+        """True iff ``task_id``'s cumulative spend plus estimate stays under cap.
+
+        Unlike :meth:`allows_task`, the ceiling is an absolute fraction of the
+        total cap, so repeated retries under one task ID cannot each claim a
+        fresh slice of the remaining budget.
+        """
+        if estimated_usd < 0:
+            return False
+        ceiling = self._cap * self._per_task_fraction
+        return self.task_spent(task_id) + estimated_usd <= ceiling
+
+    def allows_entity_cumulative(self, entity_id: str, estimated_usd: float) -> bool:
+        """True iff cumulative spend for ``entity_id`` stays under its sub-cap."""
+        if estimated_usd < 0:
+            return False
+        ceiling = self._cap * self._per_entity_fraction
+        return self.entity_spent(entity_id) + estimated_usd <= ceiling
 
     # ---------- Wall clock ----------
 
@@ -178,6 +216,8 @@ class Budget:
             "warned": list(self._warned),
             "wall_started_at": self._wall_started_at,
             "revisions_total": self._revisions_total,
+            "task_spent": dict(self._task_spent),
+            "entity_spent": dict(self._entity_spent),
         }
 
     def restore(self, data: dict) -> None:
@@ -187,3 +227,7 @@ class Budget:
         self._warned = set(data.get("warned", []))
         self._wall_started_at = data.get("wall_started_at")
         self._revisions_total = int(data.get("revisions_total", 0))
+        self._task_spent = {str(k): float(v) for k, v in dict(data.get("task_spent", {})).items()}
+        self._entity_spent = {
+            str(k): float(v) for k, v in dict(data.get("entity_spent", {})).items()
+        }

@@ -70,7 +70,10 @@ async def _build_orchestrator(
 ) -> tuple[Orchestrator, RecordingEventBus, DuckDBKnowledgeStore, FactWriter]:
     llm = StubLLMClient()
     if patched_llm_entities is not None:
-        async def fake_structured(messages, schema, tier, task_id, temperature=0.0, schema_retry=True):
+
+        async def fake_structured(
+            messages, schema, tier, task_id, temperature=0.0, schema_retry=True
+        ):
             # DiscoverAgent expects `entities` field.
             if "entities" in schema.model_fields:
                 return schema(entities=patched_llm_entities)
@@ -219,14 +222,18 @@ async def test_native_dispatch_propagates_enum_into_entity_schema(store, bus) ->
         from researcher.models import Task, TaskKind
         from researcher.storage.store import FieldCell
 
-        eid = await store.upsert_entity("War", "WWII", {
-            "name": FieldCell(
-                value="WWII",
-                confidence=1.0,
-                provenance_ids=[],
-                updated_at=datetime.now(UTC),
-            )
-        })
+        eid = await store.upsert_entity(
+            "War",
+            "WWII",
+            {
+                "name": FieldCell(
+                    value="WWII",
+                    confidence=1.0,
+                    provenance_ids=[],
+                    updated_at=datetime.now(UTC),
+                )
+            },
+        )
         task = Task(
             kind=TaskKind.EXPAND,
             spec_ref="wars",

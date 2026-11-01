@@ -50,8 +50,14 @@ _PRICING: dict[str, tuple[float, float]] = {
 }
 
 
-def _estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
-    pi, po = _PRICING.get(model, _PRICING["default"])
+def _estimate_cost(
+    model: str,
+    tokens_in: int,
+    tokens_out: int,
+    pricing: Optional[dict[str, tuple[float, float]]] = None,
+) -> float:
+    table = pricing or {}
+    pi, po = table.get(model, _PRICING.get(model, _PRICING["default"]))
     return (tokens_in * pi + tokens_out * po) / 1_000_000
 
 
@@ -92,9 +98,11 @@ class OpenRouterClient(LLMClient):
         cost_tracker: Optional[CostTracker] = None,
         request_timeout_s: float = 60.0,
         async_openai_cls: Any = None,  # test seam — inject a fake class
+        pricing: Optional[dict[str, tuple[float, float]]] = None,
     ) -> None:
         self._api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
         self._base_url = base_url
+        self._pricing = dict(pricing or {})
         self._model_map = model_map or {
             LLMTier.FAST: "openrouter/hermes-3-8b",
             LLMTier.SMART: "openrouter/hermes-3-70b",
@@ -118,11 +126,9 @@ class OpenRouterClient(LLMClient):
         self._client = cls(api_key=self._api_key, base_url=self._base_url)
         return self._client
 
-    def content_hash(self, messages: list[dict], tier: LLMTier) -> str:
-        model = self._model_map[tier]
-        blob = json.dumps(
-            {"model": model, "messages": messages}, sort_keys=True
-        ).encode()
+    def content_hash(self, messages: list[dict], tier: LLMTier, model: str | None = None) -> str:
+        resolved = model or self._model_map[tier]
+        blob = json.dumps({"model": resolved, "messages": messages}, sort_keys=True).encode()
         return hashlib.sha256(blob).hexdigest()
 
     def _apply_prompt_caching(self, messages: list[dict]) -> list[dict]:
@@ -178,15 +184,16 @@ class OpenRouterClient(LLMClient):
         task_id: str,
         temperature: float = 0.2,
         max_tokens: int | None = None,
+        model: str | None = None,
     ) -> LLMResponse:
-        key = self.content_hash(messages, tier)
+        model = model or self._model_map[tier]
+        key = self.content_hash(messages, tier, model=model)
         if self._cache is not None:
             cached = self._cache.get(key)
             if cached is not None:
                 self._cost_tracker.add(task_id, cached.usage)
                 return cached
 
-        model = self._model_map[tier]
         client = self._get_client()
         cached_messages = self._apply_prompt_caching(messages)
         kwargs: dict[str, Any] = {
@@ -203,20 +210,27 @@ class OpenRouterClient(LLMClient):
         text = raw.choices[0].message.content or ""
         usage_obj = getattr(raw, "usage", None)
         tokens_in = int(getattr(usage_obj, "prompt_tokens", 0) or 0) if usage_obj else 0
-        tokens_out = (
-            int(getattr(usage_obj, "completion_tokens", 0) or 0) if usage_obj else 0
-        )
+        tokens_out = int(getattr(usage_obj, "completion_tokens", 0) or 0) if usage_obj else 0
         cache_read_input_tokens = 0
         if usage_obj is not None:
             details = getattr(usage_obj, "prompt_tokens_details", None)
             if details is not None:
                 try:
-                    cache_read_input_tokens = int(
-                        getattr(details, "cached_tokens", 0) or 0
-                    )
+                    cache_read_input_tokens = int(getattr(details, "cached_tokens", 0) or 0)
                 except (TypeError, ValueError):
                     cache_read_input_tokens = 0
-        cost = _estimate_cost(model, tokens_in, tokens_out)
+        # Prefer the provider-reported cost when available (OpenRouter
+        # includes it on ``usage.cost``). Fall back to the local pricing
+        # table for providers/SDK versions that omit it.
+        reported_cost = getattr(usage_obj, "cost", None) if usage_obj else None
+        try:
+            cost = (
+                float(reported_cost)
+                if reported_cost is not None
+                else _estimate_cost(model, tokens_in, tokens_out, self._pricing)
+            )
+        except (TypeError, ValueError):
+            cost = _estimate_cost(model, tokens_in, tokens_out, self._pricing)
 
         response = LLMResponse(
             text=text,
@@ -242,6 +256,7 @@ class OpenRouterClient(LLMClient):
         task_id: str,
         temperature: float = 0.0,
         schema_retry: bool = True,
+        model: str | None = None,
     ) -> T:
         # Append a schema instruction so the model returns ONLY JSON.
         schema_json = json.dumps(schema.model_json_schema(), separators=(",", ":"))
@@ -256,7 +271,7 @@ class OpenRouterClient(LLMClient):
             }
         )
         response = await self.complete(
-            augmented, tier, task_id, temperature=temperature
+            augmented, tier, task_id, temperature=temperature, model=model
         )
         try:
             data = json.loads(_strip_json_fence(response.text))
@@ -277,7 +292,7 @@ class OpenRouterClient(LLMClient):
                 }
             )
             retry_response = await self.complete(
-                stricter, tier, task_id, temperature=temperature
+                stricter, tier, task_id, temperature=temperature, model=model
             )
             data = json.loads(_strip_json_fence(retry_response.text))
             return schema.model_validate(data)

@@ -59,9 +59,7 @@ def _llm_picking(winning_value: Any, reason: str = "more authoritative") -> Stub
 
 @pytest.mark.asyncio
 async def test_verify_picks_winner_and_emits_claim(store, bus) -> None:
-    entity_id = await store.upsert_entity(
-        entity_type="War", name="World War II", fields={}
-    )
+    entity_id = await store.upsert_entity(entity_type="War", name="World War II", fields={})
     now = datetime.now(UTC)
     cell_a = FieldCell(value=1939, confidence=0.9, provenance_ids=["p1"], updated_at=now)
     cell_b = FieldCell(value=1940, confidence=0.6, provenance_ids=["p2"], updated_at=now)
@@ -105,9 +103,7 @@ async def test_verify_picks_winner_and_emits_claim(store, bus) -> None:
 
 @pytest.mark.asyncio
 async def test_verify_no_matching_conflict_returns_done_with_zero_claims(store, bus) -> None:
-    entity_id = await store.upsert_entity(
-        entity_type="War", name="World War I", fields={}
-    )
+    entity_id = await store.upsert_entity(entity_type="War", name="World War I", fields={})
     deps = _make_deps()
     llm = _llm_picking(winning_value=None)
 
@@ -137,17 +133,14 @@ async def test_verify_agent_runs_three_aspect_verifiers_in_parallel(store, bus) 
 
     llm = StubLLMClient()
 
-    async def fake_structured(
-        messages, schema, tier, task_id, temperature=0.0, schema_retry=True
-    ):
+    async def fake_structured(messages, schema, tier, task_id, temperature=0.0, schema_retry=True):
         sys_text = ""
         for m in messages:
             if m.get("role") == "system":
                 content = m.get("content", "")
                 if isinstance(content, list):
                     sys_text = " ".join(
-                        p.get("text", "") if isinstance(p, dict) else str(p)
-                        for p in content
+                        p.get("text", "") if isinstance(p, dict) else str(p) for p in content
                     )
                 else:
                     sys_text = content
@@ -166,9 +159,7 @@ async def test_verify_agent_runs_three_aspect_verifiers_in_parallel(store, bus) 
 
     llm.complete_structured = fake_structured  # type: ignore[method-assign]
 
-    entity_id = await store.upsert_entity(
-        entity_type="War", name="World War II", fields={}
-    )
+    entity_id = await store.upsert_entity(entity_type="War", name="World War II", fields={})
     now = datetime.now(UTC)
     conflict = Conflict(
         conflict_id="c-mav-1",
@@ -214,9 +205,7 @@ async def test_verify_agent_runs_three_aspect_verifiers_in_parallel(store, bus) 
 @pytest.mark.asyncio
 async def test_verify_agent_majority_vote_across_aspects(store, bus) -> None:
     """Two aspects vote for value A, one votes for B -> majority wins."""
-    entity_id = await store.upsert_entity(
-        entity_type="War", name="World War II", fields={}
-    )
+    entity_id = await store.upsert_entity(entity_type="War", name="World War II", fields={})
     now = datetime.now(UTC)
     conflict = Conflict(
         conflict_id="c-mav-2",
@@ -232,9 +221,7 @@ async def test_verify_agent_majority_vote_across_aspects(store, bus) -> None:
 
     llm = StubLLMClient()
 
-    async def fake_structured(
-        messages, schema, tier, task_id, temperature=0.0, schema_retry=True
-    ):
+    async def fake_structured(messages, schema, tier, task_id, temperature=0.0, schema_retry=True):
         sys_text = ""
         for m in messages:
             if m.get("role") == "system":

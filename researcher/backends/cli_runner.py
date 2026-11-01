@@ -215,9 +215,7 @@ class ClaudeCodeRunner:
                 proc.stdin.close()
 
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(), timeout=timeout_s
-                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
             except TimeoutError:
                 await _kill_and_reap(proc)
                 return CliResult(
@@ -276,9 +274,7 @@ class ClaudeCodeRunner:
                         "claude returned empty result and no structured_output — "
                         "likely an internal error or unsupported flag combination"
                     )
-                inner = (
-                    json.loads(inner_str) if isinstance(inner_str, str) else inner_str
-                )
+                inner = json.loads(inner_str) if isinstance(inner_str, str) else inner_str
             data = SubagentResponse.model_validate(inner)
             return CliResult(
                 ok=True,
@@ -355,9 +351,7 @@ class CodexRunner:
             if self._last_message_file is not None:
                 last_message_path = self._last_message_file
             else:
-                lm_fd, lm_path = tempfile.mkstemp(
-                    prefix="researcher_lastmsg_", suffix=".txt"
-                )
+                lm_fd, lm_path = tempfile.mkstemp(prefix="researcher_lastmsg_", suffix=".txt")
                 os.close(lm_fd)
                 last_message_path = Path(lm_path)
 
@@ -374,7 +368,6 @@ class CodexRunner:
                 "--skip-git-repo-check",
                 "-m",
                 self._model,
-                "--dangerously-bypass-approvals-and-sandbox",
             ]
 
             # Cache key must be stable across invocations: the tempfile paths
@@ -393,7 +386,6 @@ class CodexRunner:
                 "--skip-git-repo-check",
                 "-m",
                 self._model,
-                "--dangerously-bypass-approvals-and-sandbox",
             ]
             key = _cache_key(stable_argv, prompt, schema)
 
@@ -450,9 +442,7 @@ class CodexRunner:
                 proc.stdin.close()
 
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(), timeout=timeout_s
-                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
             except TimeoutError:
                 await _kill_and_reap(proc)
                 return CliResult(

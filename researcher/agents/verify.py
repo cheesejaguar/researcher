@@ -60,9 +60,7 @@ class VerifyAgent(Agent):
         deps: NativeAgentDeps,
         entity_schema: dict,
     ) -> None:
-        super().__init__(
-            agent_id=agent_id, llm=llm, store=store, emit=emit, run_id=run_id
-        )
+        super().__init__(agent_id=agent_id, llm=llm, store=store, emit=emit, run_id=run_id)
         self._deps = deps
         self._entity_schema = entity_schema
 
@@ -111,8 +109,7 @@ class VerifyAgent(Agent):
             entity_name = task.target_entity_id
 
         candidates_text = "; ".join(
-            f"value={cell.value!r} (confidence={cell.confidence:.2f})"
-            for cell in match.candidates
+            f"value={cell.value!r} (confidence={cell.confidence:.2f})" for cell in match.candidates
         )
 
         # Resolve the aspect variants from the prompt registry.
@@ -189,20 +186,13 @@ class VerifyAgent(Agent):
             )
 
         # Majority vote — stringify values so lists/dicts are hashable.
-        key_counter: Counter[str] = Counter(
-            _vote_key(r.winning_value) for r in valid_results
-        )
+        key_counter: Counter[str] = Counter(_vote_key(r.winning_value) for r in valid_results)
         winning_key, winning_votes = key_counter.most_common(1)[0]
         winning_value = next(
-            r.winning_value
-            for r in valid_results
-            if _vote_key(r.winning_value) == winning_key
+            r.winning_value for r in valid_results if _vote_key(r.winning_value) == winning_key
         )
         avg_confidence = sum(r.confidence for r in valid_results) / len(valid_results)
-        reason = (
-            f"BoN-MAV majority vote: {winning_votes}/{len(valid_results)} "
-            f"aspects agree"
-        )
+        reason = f"BoN-MAV majority vote: {winning_votes}/{len(valid_results)} aspects agree"
 
         # Update the conflict in the store to resolved.
         resolved = Conflict(

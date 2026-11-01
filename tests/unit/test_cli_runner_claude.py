@@ -61,9 +61,7 @@ def _claude_envelope_structured(
 
 @pytest.mark.asyncio
 async def test_argv_construction_includes_required_flags():
-    valid = _claude_envelope(
-        json.dumps({"entity_name": "X", "extractions": [], "diagnostics": ""})
-    )
+    valid = _claude_envelope(json.dumps({"entity_name": "X", "extractions": [], "diagnostics": ""}))
     captured_argv: list = []
 
     async def fake_exec(*argv, **kwargs):
@@ -92,9 +90,7 @@ async def test_argv_construction_includes_required_flags():
 
 @pytest.mark.asyncio
 async def test_prompt_is_written_to_stdin_not_argv():
-    valid = _claude_envelope(
-        json.dumps({"entity_name": "X", "extractions": [], "diagnostics": ""})
-    )
+    valid = _claude_envelope(json.dumps({"entity_name": "X", "extractions": [], "diagnostics": ""}))
     stdin_writes: list[bytes] = []
     proc = _fake_process(stdout=valid)
     proc.stdin.write = lambda data: stdin_writes.append(data)
@@ -266,6 +262,7 @@ async def test_empty_result_and_missing_structured_output_is_parse_failed():
 @pytest.mark.asyncio
 async def test_not_logged_in_pattern_match():
     """Claude v2.1+ --bare mode w/o ANTHROPIC_API_KEY emits 'Not logged in'."""
+
     async def fake_exec(*argv, **kwargs):
         return _fake_process(
             stdout=b"",
@@ -284,9 +281,7 @@ async def test_not_logged_in_pattern_match():
 @pytest.mark.asyncio
 async def test_bare_flag_opt_out_via_constructor():
     """Passing bare=False strips --bare from argv so OAuth login works."""
-    valid = _claude_envelope(
-        json.dumps({"entity_name": "X", "extractions": [], "diagnostics": ""})
-    )
+    valid = _claude_envelope(json.dumps({"entity_name": "X", "extractions": [], "diagnostics": ""}))
     captured_argv: list = []
 
     async def fake_exec(*argv, **kwargs):
@@ -307,9 +302,7 @@ async def test_bare_flag_opt_out_via_constructor():
 @pytest.mark.asyncio
 async def test_bare_flag_opt_out_via_env_var(monkeypatch):
     """RESEARCHER_CLAUDE_BARE=0 disables --bare even without constructor arg."""
-    valid = _claude_envelope(
-        json.dumps({"entity_name": "X", "extractions": [], "diagnostics": ""})
-    )
+    valid = _claude_envelope(json.dumps({"entity_name": "X", "extractions": [], "diagnostics": ""}))
     captured_argv: list = []
 
     async def fake_exec(*argv, **kwargs):
@@ -327,9 +320,7 @@ async def test_bare_flag_opt_out_via_env_var(monkeypatch):
 @pytest.mark.asyncio
 async def test_bare_flag_default_is_on(monkeypatch):
     """Without env var or constructor arg, --bare stays on for backwards compat."""
-    valid = _claude_envelope(
-        json.dumps({"entity_name": "X", "extractions": [], "diagnostics": ""})
-    )
+    valid = _claude_envelope(json.dumps({"entity_name": "X", "extractions": [], "diagnostics": ""}))
     captured_argv: list = []
 
     async def fake_exec(*argv, **kwargs):
@@ -395,9 +386,7 @@ async def test_cancellation_kills_child_and_propagates():
 
     runner = ClaudeCodeRunner(model="sonnet")
     with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
-        task = asyncio.create_task(
-            runner.execute(prompt="p", schema=SCHEMA, timeout_s=60)
-        )
+        task = asyncio.create_task(runner.execute(prompt="p", schema=SCHEMA, timeout_s=60))
         await asyncio.sleep(0.05)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -430,14 +419,16 @@ async def test_failure_results_are_not_cached(tmp_path):
         b"not json",
         b"still not json",  # the inner retry from execute() also fails
         # Second call (different execute() invocation): valid envelope
-        json.dumps({
-            "type": "result",
-            "subtype": "final_result",
-            "result": json.dumps({"entity_name": "OK", "extractions": [], "diagnostics": ""}),
-            "usage": {"input_tokens": 10, "output_tokens": 5},
-            "total_cost_usd": 0.0,
-            "is_error": False,
-        }).encode(),
+        json.dumps(
+            {
+                "type": "result",
+                "subtype": "final_result",
+                "result": json.dumps({"entity_name": "OK", "extractions": [], "diagnostics": ""}),
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+                "total_cost_usd": 0.0,
+                "is_error": False,
+            }
+        ).encode(),
     ]
 
     async def fake_exec(*argv, **kwargs):
@@ -477,9 +468,7 @@ async def test_cancellation_during_stdin_write_kills_child():
 
     runner = ClaudeCodeRunner(model="sonnet")
     with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
-        task = asyncio.create_task(
-            runner.execute(prompt="p", schema=SCHEMA, timeout_s=60)
-        )
+        task = asyncio.create_task(runner.execute(prompt="p", schema=SCHEMA, timeout_s=60))
         # Wait until the runner is blocked inside drain().
         await cancellation_event.wait()
         task.cancel()
@@ -521,9 +510,7 @@ async def test_double_kill_does_not_mask_cancellation():
 
     runner = ClaudeCodeRunner(model="sonnet")
     with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
-        task = asyncio.create_task(
-            runner.execute(prompt="p", schema=SCHEMA, timeout_s=60)
-        )
+        task = asyncio.create_task(runner.execute(prompt="p", schema=SCHEMA, timeout_s=60))
         await asyncio.sleep(0.05)
         task.cancel()
         # The exception MUST be CancelledError, not ProcessLookupError.

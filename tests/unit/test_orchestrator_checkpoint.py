@@ -122,6 +122,7 @@ async def test_orchestrator_saves_checkpoint_each_cycle(tmp_path, bus):
     await store.open()
     try:
         from researcher.spec import build_entity_class
+
         await store.init_schema(build_entity_class(spec.entities[0]))
         llm = StubLLMClient()
         resolver = make_resolver(store)
@@ -130,18 +131,27 @@ async def test_orchestrator_saves_checkpoint_each_cycle(tmp_path, bus):
             "fields": [{"name": "name", "type": "str", "required": True}],
         }
 
-        async def _noop_fact(_eid, _claim): return None
-        async def _noop_conflict(_eid, _cells): return None
+        async def _noop_fact(_eid, _claim):
+            return None
+
+        async def _noop_conflict(_eid, _cells):
+            return None
 
         writer = FactWriter(
-            store=store, resolver=resolver, entity_schema=entity_schema,
-            emit_fact=_noop_fact, emit_conflict=_noop_conflict,
+            store=store,
+            resolver=resolver,
+            entity_schema=entity_schema,
+            emit_fact=_noop_fact,
+            emit_conflict=_noop_conflict,
         )
         scheduler = Scheduler(spec=spec, store=store)
         budget = Budget(usd_cap=3.0, wall_cap_s=600)
 
         from researcher.backends.resolver import BackendResolver
-        backend_resolver = BackendResolver(which_fn=lambda c: "/usr/local/bin/claude" if c == "claude" else None)
+
+        backend_resolver = BackendResolver(
+            which_fn=lambda c: "/usr/local/bin/claude" if c == "claude" else None
+        )
 
         orch = Orchestrator(
             spec=spec,

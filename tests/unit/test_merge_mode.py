@@ -198,6 +198,7 @@ async def test_writer_in_merge_mode_accumulates_across_runs(tmp_path):
             pass  # placeholder; we'll use a Pydantic class via build_entity_class
 
         from researcher.spec import EntitySpec, FieldSpec
+
         e_spec = EntitySpec(
             name="War",
             fields=[
@@ -210,8 +211,11 @@ async def test_writer_in_merge_mode_accumulates_across_runs(tmp_path):
         WarCls = build_entity_class(e_spec)
         await store.init_schema(WarCls)
 
-        async def _emit_fact(_eid, _claim): return None
-        async def _emit_conflict(_eid, _cells): return None
+        async def _emit_fact(_eid, _claim):
+            return None
+
+        async def _emit_conflict(_eid, _cells):
+            return None
 
         # Run 1: add start_year.
         writer1 = FactWriter(

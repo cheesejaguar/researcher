@@ -1,0 +1,45 @@
+---
+name: Bug report
+description: Report a reproducible problem with researcher.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please include enough detail
+        to reproduce it. Security issues should be reported privately instead.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Exact commands, spec file, and inputs needed to reproduce.
+      placeholder: |
+        1. `researcher run specs/wars.yaml --offline ...`
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        Output of `researcher --version`, Python version, OS, and any relevant
+        `runs/<id>/events.jsonl` lines (redact secrets and private URLs).
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checks
+      options:
+        - label: I searched existing issues for duplicates.
+          required: true
+        - label: I removed API keys and private data from this report.
+          required: true
