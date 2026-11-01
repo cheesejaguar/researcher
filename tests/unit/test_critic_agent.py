@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -12,9 +11,9 @@ from researcher.agents.critic import CriticAgent
 from researcher.agents.native_deps import NativeAgentDeps
 from researcher.llm.prompts import default_registry
 from researcher.models import AgentState, Task, TaskKind
-from tests.stubs.bus import StubEventBus
+from researcher.search.file_seeds import FileSeedsProvider
 from tests.stubs.llm import StubLLMClient
-from tests.stubs.store import StubKnowledgeStore
+from tests.support import mock_http
 
 
 def _entity_schema() -> dict:
@@ -32,13 +31,11 @@ def _critic_task(trigger_agent: str = "native-abc") -> Task:
 
 
 def _make_deps() -> NativeAgentDeps:
-    search = MagicMock()
-    search.name = "mock"
-    search.search = AsyncMock(return_value=[])
-    http = MagicMock()
-    http.fetch = AsyncMock()
     return NativeAgentDeps(
-        search=search, http=http, prompts=default_registry(), max_fetch_per_task=2
+        search=FileSeedsProvider(seeds={}),
+        http=mock_http({}),
+        prompts=default_registry(),
+        max_fetch_per_task=2,
     )
 
 
@@ -53,7 +50,7 @@ def _llm_suggesting_card(name: str, description: str, prompt: str) -> StubLLMCli
 
 
 @pytest.mark.asyncio
-async def test_critic_appends_skill_card_to_suggestions_file(tmp_path: Path) -> None:
+async def test_critic_appends_skill_card_to_suggestions_file(tmp_path: Path, store, bus) -> None:
     suggestions_path = tmp_path / "_suggestions.md"
     deps = _make_deps()
     llm = _llm_suggesting_card(
@@ -61,8 +58,6 @@ async def test_critic_appends_skill_card_to_suggestions_file(tmp_path: Path) -> 
         description="Check the Wikipedia infobox first for structured fields.",
         prompt="For War entities, prefer the infobox.",
     )
-    bus = StubEventBus()
-    store = StubKnowledgeStore()
 
     agent = CriticAgent(
         agent_id="native-critic",
@@ -86,7 +81,7 @@ async def test_critic_appends_skill_card_to_suggestions_file(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_critic_creates_parent_directory_if_missing(tmp_path: Path) -> None:
+async def test_critic_creates_parent_directory_if_missing(tmp_path: Path, store, bus) -> None:
     suggestions_path = tmp_path / "nested" / "dir" / "_suggestions.md"
     deps = _make_deps()
     llm = _llm_suggesting_card(
@@ -94,8 +89,6 @@ async def test_critic_creates_parent_directory_if_missing(tmp_path: Path) -> Non
         description="description",
         prompt="fragment",
     )
-    bus = StubEventBus()
-    store = StubKnowledgeStore()
 
     agent = CriticAgent(
         agent_id="native-critic",
@@ -118,12 +111,10 @@ async def test_critic_creates_parent_directory_if_missing(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_critic_does_not_receive_verifier_output_in_prompt(tmp_path):
+async def test_critic_does_not_receive_verifier_output_in_prompt(tmp_path, store, bus):
     """The Critic's LLM call should not contain any text suggesting prior verifier conditioning."""
     from datetime import datetime, timedelta
 
-    from researcher.fetch.http import HttpFetcher
-    from researcher.fetch.politeness import PolitenessLimiter
     from researcher.search.file_seeds import FileSeedsProvider
 
     captured_messages: list = []
@@ -134,12 +125,9 @@ async def test_critic_does_not_receive_verifier_output_in_prompt(tmp_path):
             return schema(name="test_skill", description="x", prompt_fragment="y")
 
     llm = _SpyLLM()
-    store = StubKnowledgeStore()
-    await store.open()
-    bus = StubEventBus()
     deps = NativeAgentDeps(
         search=FileSeedsProvider(seeds={}),
-        http=HttpFetcher(politeness=PolitenessLimiter()),
+        http=mock_http({}),
         prompts=default_registry(),
     )
 
@@ -185,12 +173,10 @@ async def test_critic_does_not_receive_verifier_output_in_prompt(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_critic_run_still_writes_skill_suggestion_file(tmp_path):
+async def test_critic_run_still_writes_skill_suggestion_file(tmp_path, store, bus):
     """Make sure the existing critic functionality (writing _suggestions.md) is preserved."""
     from datetime import datetime, timedelta
 
-    from researcher.fetch.http import HttpFetcher
-    from researcher.fetch.politeness import PolitenessLimiter
     from researcher.search.file_seeds import FileSeedsProvider
 
     class _MockLLM(StubLLMClient):
@@ -205,12 +191,12 @@ async def test_critic_run_still_writes_skill_suggestion_file(tmp_path):
     agent = CriticAgent(
         agent_id="c1",
         llm=_MockLLM(),
-        store=StubKnowledgeStore(),
-        emit=StubEventBus().emit,
+        store=store,
+        emit=bus.emit,
         run_id="r1",
         deps=NativeAgentDeps(
             search=FileSeedsProvider(seeds={}),
-            http=HttpFetcher(politeness=PolitenessLimiter()),
+            http=mock_http({}),
             prompts=default_registry(),
         ),
         entity_schema={"entity_type": "War", "fields": []},

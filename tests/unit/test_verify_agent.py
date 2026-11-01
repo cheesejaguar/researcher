@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -12,10 +11,10 @@ from researcher.agents.native_deps import NativeAgentDeps
 from researcher.agents.verify import VerifyAgent
 from researcher.llm.prompts import default_registry
 from researcher.models import AgentState, Task, TaskKind
+from researcher.search.file_seeds import FileSeedsProvider
 from researcher.storage.store import Conflict, FieldCell
-from tests.stubs.bus import StubEventBus
 from tests.stubs.llm import StubLLMClient
-from tests.stubs.store import StubKnowledgeStore
+from tests.support import mock_http
 
 
 def _entity_schema() -> dict:
@@ -40,13 +39,11 @@ def _verify_task(entity_id: str, field: str) -> Task:
 
 
 def _make_deps() -> NativeAgentDeps:
-    search = MagicMock()
-    search.name = "mock"
-    search.search = AsyncMock(return_value=[])
-    http = MagicMock()
-    http.fetch = AsyncMock()
     return NativeAgentDeps(
-        search=search, http=http, prompts=default_registry(), max_fetch_per_task=2
+        search=FileSeedsProvider(seeds={}),
+        http=mock_http({}),
+        prompts=default_registry(),
+        max_fetch_per_task=2,
     )
 
 
@@ -61,8 +58,7 @@ def _llm_picking(winning_value: Any, reason: str = "more authoritative") -> Stub
 
 
 @pytest.mark.asyncio
-async def test_verify_picks_winner_and_emits_claim() -> None:
-    store = StubKnowledgeStore()
+async def test_verify_picks_winner_and_emits_claim(store, bus) -> None:
     entity_id = await store.upsert_entity(
         entity_type="War", name="World War II", fields={}
     )
@@ -80,7 +76,6 @@ async def test_verify_picks_winner_and_emits_claim() -> None:
 
     deps = _make_deps()
     llm = _llm_picking(winning_value=1939)
-    bus = StubEventBus()
 
     agent = VerifyAgent(
         agent_id="native-ver",
@@ -109,14 +104,12 @@ async def test_verify_picks_winner_and_emits_claim() -> None:
 
 
 @pytest.mark.asyncio
-async def test_verify_no_matching_conflict_returns_done_with_zero_claims() -> None:
-    store = StubKnowledgeStore()
+async def test_verify_no_matching_conflict_returns_done_with_zero_claims(store, bus) -> None:
     entity_id = await store.upsert_entity(
         entity_type="War", name="World War I", fields={}
     )
     deps = _make_deps()
     llm = _llm_picking(winning_value=None)
-    bus = StubEventBus()
 
     agent = VerifyAgent(
         agent_id="native-ver",
@@ -138,7 +131,7 @@ async def test_verify_no_matching_conflict_returns_done_with_zero_claims() -> No
 
 
 @pytest.mark.asyncio
-async def test_verify_agent_runs_three_aspect_verifiers_in_parallel() -> None:
+async def test_verify_agent_runs_three_aspect_verifiers_in_parallel(store, bus) -> None:
     """VerifyAgent should call complete_structured 3 times (once per aspect) and majority vote."""
     call_aspects: list[str] = []
 
@@ -173,7 +166,6 @@ async def test_verify_agent_runs_three_aspect_verifiers_in_parallel() -> None:
 
     llm.complete_structured = fake_structured  # type: ignore[method-assign]
 
-    store = StubKnowledgeStore()
     entity_id = await store.upsert_entity(
         entity_type="War", name="World War II", fields={}
     )
@@ -190,7 +182,6 @@ async def test_verify_agent_runs_three_aspect_verifiers_in_parallel() -> None:
     )
     await store.record_conflict(conflict)
 
-    bus = StubEventBus()
     deps = _make_deps()
 
     agent = VerifyAgent(
@@ -221,9 +212,8 @@ async def test_verify_agent_runs_three_aspect_verifiers_in_parallel() -> None:
 
 
 @pytest.mark.asyncio
-async def test_verify_agent_majority_vote_across_aspects() -> None:
+async def test_verify_agent_majority_vote_across_aspects(store, bus) -> None:
     """Two aspects vote for value A, one votes for B -> majority wins."""
-    store = StubKnowledgeStore()
     entity_id = await store.upsert_entity(
         entity_type="War", name="World War II", fields={}
     )
@@ -257,7 +247,6 @@ async def test_verify_agent_majority_vote_across_aspects() -> None:
 
     llm.complete_structured = fake_structured  # type: ignore[method-assign]
 
-    bus = StubEventBus()
     deps = _make_deps()
 
     agent = VerifyAgent(

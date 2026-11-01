@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -11,9 +10,9 @@ from researcher.agents.enrich import EnrichAgent
 from researcher.agents.native_deps import NativeAgentDeps
 from researcher.llm.prompts import default_registry
 from researcher.models import AgentState, Task, TaskKind
-from tests.stubs.bus import StubEventBus
+from researcher.search.file_seeds import FileSeedsProvider
 from tests.stubs.llm import StubLLMClient
-from tests.stubs.store import StubKnowledgeStore
+from tests.support import mock_http
 
 
 def _entity_schema() -> dict:
@@ -36,13 +35,11 @@ def _enrich_task(entity_id: str) -> Task:
 
 
 def _make_deps() -> NativeAgentDeps:
-    search = MagicMock()
-    search.name = "mock"
-    search.search = AsyncMock(return_value=[])
-    http = MagicMock()
-    http.fetch = AsyncMock()
     return NativeAgentDeps(
-        search=search, http=http, prompts=default_registry(), max_fetch_per_task=2
+        search=FileSeedsProvider(seeds={}),
+        http=mock_http({}),
+        prompts=default_registry(),
+        max_fetch_per_task=2,
     )
 
 
@@ -57,14 +54,12 @@ def _llm_suggesting(related: list[str]) -> StubLLMClient:
 
 
 @pytest.mark.asyncio
-async def test_enrich_spawns_discover_tasks_for_related_entities() -> None:
-    store = StubKnowledgeStore()
+async def test_enrich_spawns_discover_tasks_for_related_entities(store, bus) -> None:
     entity_id = await store.upsert_entity(
         entity_type="War", name="World War II", fields={}
     )
     deps = _make_deps()
     llm = _llm_suggesting(["Korean War", "Cold War"])
-    bus = StubEventBus()
 
     agent = EnrichAgent(
         agent_id="native-enr",
@@ -92,11 +87,9 @@ async def test_enrich_spawns_discover_tasks_for_related_entities() -> None:
 
 
 @pytest.mark.asyncio
-async def test_enrich_entity_not_found_returns_empty_spawned() -> None:
-    store = StubKnowledgeStore()
+async def test_enrich_entity_not_found_returns_empty_spawned(store, bus) -> None:
     deps = _make_deps()
     llm = _llm_suggesting([])
-    bus = StubEventBus()
 
     agent = EnrichAgent(
         agent_id="native-enr",

@@ -16,6 +16,7 @@ from researcher.storage.writer import (
     score_confidence,
     validate_type,
 )
+from tests.support import make_resolver
 
 WAR_SCHEMA = {
     "entity_type": "War",
@@ -201,30 +202,10 @@ async def test_score_confidence_with_high_source_authority():
 
 @pytest.mark.asyncio
 async def test_writer_persists_fact_to_store(tmp_path):
-    from researcher.storage.resolver import (
-        EntityResolver,
-        ResolveDecision,
-        ResolveResult,
-    )
 
     store = DuckDBKnowledgeStore(db_path=tmp_path / "s.duckdb")
     await store.open()
     try:
-
-        class _StubResolver(EntityResolver):
-            async def resolve(self, entity_type, name, context=None):
-                return ResolveResult(
-                    decision=ResolveDecision.AUTO_MERGE,
-                    entity_id="stub",
-                    similarity=1.0,
-                    candidate_ids=[],
-                )
-
-            async def add_distinct_pair(self, a, b):
-                return None
-
-            async def is_blocked(self, a, b):
-                return False
 
         emitted_facts: list[tuple[str, str]] = []
 
@@ -236,7 +217,7 @@ async def test_writer_persists_fact_to_store(tmp_path):
 
         writer = FactWriter(
             store=store,
-            resolver=_StubResolver(),
+            resolver=make_resolver(store),
             entity_schema=WAR_SCHEMA,
             emit_fact=emit_fact,
             emit_conflict=emit_conflict,
@@ -265,11 +246,6 @@ async def test_writer_persists_fact_to_store(tmp_path):
 
 @pytest.mark.asyncio
 async def test_writer_records_conflict_when_value_differs(tmp_path):
-    from researcher.storage.resolver import (
-        EntityResolver,
-        ResolveDecision,
-        ResolveResult,
-    )
 
     store = DuckDBKnowledgeStore(db_path=tmp_path / "s.duckdb")
     await store.open()
@@ -282,21 +258,6 @@ async def test_writer_records_conflict_when_value_differs(tmp_path):
         )
         await store.upsert_entity("War", "WWII", {"start_year": existing_cell})
 
-        class _StubResolver(EntityResolver):
-            async def resolve(self, entity_type, name, context=None):
-                return ResolveResult(
-                    decision=ResolveDecision.AUTO_MERGE,
-                    entity_id="stub",
-                    similarity=1.0,
-                    candidate_ids=[],
-                )
-
-            async def add_distinct_pair(self, a, b):
-                return None
-
-            async def is_blocked(self, a, b):
-                return False
-
         conflict_calls: list[tuple[str, list[FieldCell]]] = []
 
         async def emit_conflict(eid, cells):
@@ -307,7 +268,7 @@ async def test_writer_records_conflict_when_value_differs(tmp_path):
 
         writer = FactWriter(
             store=store,
-            resolver=_StubResolver(),
+            resolver=make_resolver(store),
             entity_schema=WAR_SCHEMA,
             emit_fact=emit_fact,
             emit_conflict=emit_conflict,

@@ -2,46 +2,50 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from researcher.backends.resolver import BackendResolver
 from researcher.budget import Budget
-from researcher.orchestrator import Orchestrator
+from researcher.integrations.obsidian import ObsidianWriter
+from researcher.orchestrator import Orchestrator, StopReason
 from researcher.scheduler import Scheduler
 from researcher.spec import EntitySpec, FieldSpec, RunSpec
 from researcher.storage.writer import FactWriter
-from tests.stubs.bus import StubEventBus
 from tests.stubs.cli_runner import StubCliRunner, make_wars_discover_result
 from tests.stubs.llm import StubLLMClient
-from tests.stubs.resolver import StubEntityResolver
-from tests.stubs.store import StubKnowledgeStore
+from tests.support import make_resolver
 
 
-class MockObsidianWriter:
-    """Spy that records all on_fact/start/flush/stop calls."""
+class CountingObsidianWriter(ObsidianWriter):
+    """The real ObsidianWriter (writing into a temp vault) with call counters
+    on the lifecycle hooks the orchestrator is responsible for driving."""
 
-    def __init__(self) -> None:
+    def __init__(self, vault_path: Path, raise_on_fact: bool = False) -> None:
+        super().__init__(vault_path=vault_path)
         self.started = 0
         self.stopped = 0
         self.flushed = 0
-        self.facts: list[tuple[str, str]] = []
-        self.raise_on_fact: bool = False
+        self.raise_on_fact = raise_on_fact
 
     async def start(self) -> None:
         self.started += 1
+        await super().start()
 
     async def on_fact(self, claim, run_id: str) -> None:
         if self.raise_on_fact:
             raise RuntimeError("simulated obsidian failure")
-        self.facts.append((claim.field, run_id))
+        await super().on_fact(claim, run_id)
 
     async def flush(self) -> None:
         self.flushed += 1
+        await super().flush()
 
     async def stop(self) -> None:
         self.stopped += 1
+        await super().stop()
 
 
 def _which_claude(cmd: str) -> str | None:
@@ -57,6 +61,8 @@ async def _noop_conflict(_entity_id, _cells):
 
 
 async def _make_orchestrator(
+    store,
+    bus,
     obsidian: Any,
     runner: StubCliRunner | None = None,
 ) -> Orchestrator:
@@ -78,11 +84,8 @@ async def _make_orchestrator(
         backend_policy="auto",
         max_cycles=1,
     )
-    store = StubKnowledgeStore()
-    await store.open()
     llm = StubLLMClient()
-    bus = StubEventBus()
-    resolver = StubEntityResolver()
+    resolver = make_resolver(store)
     entity_schema = {
         "entity_type": "War",
         "fields": [{"name": "name", "type": "str", "required": True}],
@@ -115,46 +118,58 @@ async def _make_orchestrator(
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_forwards_claims_to_obsidian_writer():
-    ob = MockObsidianWriter()
-    orch = await _make_orchestrator(ob)
+async def test_orchestrator_forwards_claims_to_obsidian_writer(tmp_path: Path, store, bus):
+    ob = CountingObsidianWriter(tmp_path)
+    orch = await _make_orchestrator(store, bus, ob)
     await orch.run()
-    # The wars_discover fixture has 4 extractions, so 4 on_fact calls.
-    assert len(ob.facts) == 4
-    # Every call passed the run_id.
-    assert all(run_id == "run-x" for _, run_id in ob.facts)
+
+    note = tmp_path / "researcher" / "War" / "World War II.md"
+    assert note.exists()
+    text = note.read_text()
+    # All four extractions from the wars_discover fixture reach the note,
+    # tagged with this run's id.
+    for expected in ("1939", "1945", "Allies", "Axis", "run-x"):
+        assert expected in text
+    assert ob.stats["errors"] == 0
+    # The post-run hook writes the per-type Dataview index.
+    assert (tmp_path / "researcher" / "War" / "_index.md").exists()
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_calls_start_and_stop_exactly_once():
-    ob = MockObsidianWriter()
-    orch = await _make_orchestrator(ob)
+async def test_orchestrator_calls_start_and_stop_exactly_once(tmp_path: Path, store, bus):
+    ob = CountingObsidianWriter(tmp_path)
+    orch = await _make_orchestrator(store, bus, ob)
     await orch.run()
     assert ob.started == 1
     assert ob.stopped == 1
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_flushes_at_cycle_end():
-    ob = MockObsidianWriter()
-    orch = await _make_orchestrator(ob)
+async def test_orchestrator_flushes_at_cycle_end(tmp_path: Path, store, bus):
+    ob = CountingObsidianWriter(tmp_path)
+    orch = await _make_orchestrator(store, bus, ob)
     await orch.run()
-    # One cycle → at least one flush call.
-    assert ob.flushed >= 1
+    # One cycle -> one cycle-end flush, plus the final flush inside stop().
+    assert ob.flushed == 2
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_without_obsidian_writer_is_baseline():
-    orch = await _make_orchestrator(None)
+async def test_orchestrator_without_obsidian_writer_is_baseline(store, bus):
+    orch = await _make_orchestrator(store, bus, None)
     reason = await orch.run()
-    assert reason is not None
+    assert reason == StopReason.PLATEAU
+    rows = await store.query("SELECT name FROM entities")
+    assert [r["name"] for r in rows] == ["World War II"]
 
 
 @pytest.mark.asyncio
-async def test_obsidian_write_failure_does_not_crash_run():
-    ob = MockObsidianWriter()
-    ob.raise_on_fact = True
-    orch = await _make_orchestrator(ob)
+async def test_obsidian_write_failure_does_not_crash_run(tmp_path: Path, store, bus):
+    ob = CountingObsidianWriter(tmp_path, raise_on_fact=True)
+    orch = await _make_orchestrator(store, bus, ob)
     reason = await orch.run()
-    assert reason is not None
+    # The secondary sink failing must not change the run outcome or block
+    # the primary store write.
+    assert reason == StopReason.PLATEAU
+    rows = await store.query("SELECT name FROM entities")
+    assert [r["name"] for r in rows] == ["World War II"]
     assert ob.stopped == 1

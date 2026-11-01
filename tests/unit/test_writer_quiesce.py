@@ -7,8 +7,6 @@ import pytest
 
 from researcher.models import FactClaim, Provenance
 from researcher.storage.writer import FactWriter
-from tests.stubs.resolver import StubEntityResolver
-from tests.stubs.store import StubKnowledgeStore
 
 
 def _make_claim(i: int) -> FactClaim:
@@ -32,10 +30,7 @@ def _make_claim(i: int) -> FactClaim:
     )
 
 
-async def _make_writer() -> FactWriter:
-    store = StubKnowledgeStore()
-    await store.open()
-    resolver = StubEntityResolver()
+def _make_writer(store, resolver) -> FactWriter:
 
     async def _noop_fact(_entity_id, _claim):
         return None
@@ -54,24 +49,27 @@ async def _make_writer() -> FactWriter:
 
 
 @pytest.mark.asyncio
-async def test_quiesce_waits_for_all_submitted_claims():
-    writer = await _make_writer()
+async def test_quiesce_waits_for_all_submitted_claims(store, resolver):
+    writer = _make_writer(store, resolver)
     writer.start()
     try:
         for i in range(10):
             await writer.submit(_make_claim(i))
         await writer.quiesce()
-        # After quiesce, the metrics counter must have observed all 10 claims
-        # (even though the no-op pipeline doesn't actually write anything).
+        # `submitted` is bumped synchronously by submit(); `written` only
+        # moves once the drain loop has processed a claim, so it is the
+        # counter that proves quiesce actually waited.
         assert writer.metrics["submitted"] == 10
+        assert writer.metrics["written"] == 10
+        assert (await store.snapshot_metrics()).entities_total == 10
     finally:
         await writer.drain()
 
 
 @pytest.mark.asyncio
-async def test_quiesce_does_not_stop_writer_task():
+async def test_quiesce_does_not_stop_writer_task(store, resolver):
     """After quiesce, the writer task should still be running and accepting more claims."""
-    writer = await _make_writer()
+    writer = _make_writer(store, resolver)
     task = writer.start()
     try:
         for i in range(5):
@@ -83,15 +81,15 @@ async def test_quiesce_does_not_stop_writer_task():
         for i in range(5, 10):
             await writer.submit(_make_claim(i))
         await writer.quiesce()
-        assert writer.metrics["submitted"] == 10
+        assert writer.metrics["written"] == 10
     finally:
         await writer.drain()
     assert task.done()
 
 
 @pytest.mark.asyncio
-async def test_quiesce_on_empty_queue_returns_immediately():
-    writer = await _make_writer()
+async def test_quiesce_on_empty_queue_returns_immediately(store, resolver):
+    writer = _make_writer(store, resolver)
     writer.start()
     try:
         # No submits — quiesce should return without hanging.
@@ -101,9 +99,9 @@ async def test_quiesce_on_empty_queue_returns_immediately():
 
 
 @pytest.mark.asyncio
-async def test_quiesce_timeout_raises():
+async def test_quiesce_timeout_raises(store, resolver):
     """If the writer task is blocked somehow, quiesce should raise TimeoutError."""
-    writer = await _make_writer()
+    writer = _make_writer(store, resolver)
     # Don't call writer.start() — no drain coroutine is consuming the queue.
     await writer.submit(_make_claim(0))
     with pytest.raises(asyncio.TimeoutError):

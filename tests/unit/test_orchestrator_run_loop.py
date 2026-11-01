@@ -1,5 +1,6 @@
 """Tests for the Orchestrator.run() loop — agent dispatch, claim submission, stop reasons."""
 
+import json
 
 import pytest
 
@@ -15,18 +16,19 @@ from researcher.events import (
     RunComplete,
     SubagentCall,
 )
+from researcher.llm.client import LLMUsage
+from researcher.llm.cost_tracker import SimpleCostTracker
 from researcher.orchestrator import Orchestrator, StopReason
 from researcher.scheduler import Scheduler
 from researcher.spec import EntitySpec, FieldSpec, RunSpec
+from researcher.storage.duckdb_store import DuckDBKnowledgeStore
 from researcher.storage.writer import FactWriter
-from tests.stubs.bus import StubEventBus
 from tests.stubs.cli_runner import (
     StubCliRunner,
     make_wars_discover_result,
 )
 from tests.stubs.llm import StubLLMClient
-from tests.stubs.resolver import StubEntityResolver
-from tests.stubs.store import StubKnowledgeStore
+from tests.support import RecordingEventBus, make_resolver
 
 
 def _which_claude(cmd: str) -> str | None:
@@ -35,6 +37,12 @@ def _which_claude(cmd: str) -> str | None:
 
 def _which_none(_: str) -> str | None:
     return None
+
+
+def _tracker_with_spend(usd: float) -> SimpleCostTracker:
+    tracker = SimpleCostTracker()
+    tracker.add("task-0", LLMUsage(tokens_in=0, tokens_out=0, cost_usd=usd, model="m"))
+    return tracker
 
 
 def _sample_spec(policy: str = "auto", max_cycles: int = 1) -> RunSpec:
@@ -64,16 +72,15 @@ async def _noop_conflict(_entity_id, _cells):
 
 
 async def _make_orchestrator(
+    store: DuckDBKnowledgeStore,
+    bus: RecordingEventBus,
     spec: RunSpec,
     which_fn=_which_claude,
     runner: StubCliRunner | None = None,
     budget: Budget | None = None,
-) -> tuple[Orchestrator, StubEventBus, StubKnowledgeStore, FactWriter]:
-    store = StubKnowledgeStore()
-    await store.open()
+) -> tuple[Orchestrator, RecordingEventBus, DuckDBKnowledgeStore, FactWriter]:
     llm = StubLLMClient()
-    bus = StubEventBus()
-    resolver = StubEntityResolver()
+    resolver = make_resolver(store)
     entity_schema = {
         "entity_type": "War",
         "fields": [{"name": "name", "type": "str", "required": True}],
@@ -108,20 +115,25 @@ async def _make_orchestrator(
 
 
 @pytest.mark.asyncio
-async def test_run_dispatches_subagent_and_submits_claims_to_writer():
+async def test_run_dispatches_subagent_and_submits_claims_to_writer(store, bus):
     runner = StubCliRunner()
     runner.add_response_for_any(make_wars_discover_result())
     spec = _sample_spec(policy="auto")
-    orch, bus, _store, writer = await _make_orchestrator(spec, runner=runner)
+    orch, bus, _store, writer = await _make_orchestrator(store, bus, spec, runner=runner)
 
     reason = await orch.run()
 
-    # The subagent was called.
-    assert len(runner.calls) >= 1
-    # Claims submitted to writer. The fixture has 4 extractions, so at least 4 submits.
-    assert writer.metrics["submitted"] >= 4
-    # No exceptions propagated.
-    assert reason in (StopReason.NO_TASKS, StopReason.PLATEAU, StopReason.BUDGET, StopReason.DEADLINE)
+    # One seed, one cycle -> exactly one subagent call.
+    assert len(runner.calls) == 1
+    # The fixture has 4 extractions for one entity; all reach the writer and
+    # land in the real store.
+    assert writer.metrics["submitted"] == 4
+    rows = await store.query(
+        "SELECT name FROM entities WHERE entity_type = ?", ("War",)
+    )
+    assert [r["name"] for r in rows] == ["World War II"]
+    # No exceptions propagated; the single-cycle cap ends the run.
+    assert reason == StopReason.PLATEAU
     # At least one SubagentCall event on the bus.
     subagent_events = [e for e in bus.events if isinstance(e, SubagentCall)]
     assert len(subagent_events) >= 1
@@ -131,11 +143,11 @@ async def test_run_dispatches_subagent_and_submits_claims_to_writer():
 
 
 @pytest.mark.asyncio
-async def test_run_emits_cycle_and_run_events():
+async def test_run_emits_cycle_and_run_events(store, bus):
     runner = StubCliRunner()
     runner.add_response_for_any(make_wars_discover_result())
     spec = _sample_spec(policy="auto")
-    orch, bus, _store, _writer = await _make_orchestrator(spec, runner=runner)
+    orch, bus, _store, _writer = await _make_orchestrator(store, bus, spec, runner=runner)
 
     await orch.run()
 
@@ -151,14 +163,13 @@ async def test_run_emits_cycle_and_run_events():
 
 
 @pytest.mark.asyncio
-async def test_run_native_path_raises_not_implemented():
-    """With no CLI detected and backend_policy=auto, _spawn_agent should raise.
-
-    Wave 1-D (native agents) isn't implemented yet; we fail loud with a clear
-    message rather than silently producing bogus results.
+async def test_run_native_path_raises_not_implemented(store, bus):
+    """With no CLI detected and backend_policy=auto, the native path is
+    chosen; without ``set_native_deps`` it raises NotImplementedError and the
+    run ends with ERROR instead of silently producing bogus results.
     """
     spec = _sample_spec(policy="auto")
-    orch, _bus, _store, _writer = await _make_orchestrator(spec, which_fn=_which_none)
+    orch, _bus, _store, _writer = await _make_orchestrator(store, bus, spec, which_fn=_which_none)
 
     reason = await orch.run()
     # The run should end with ERROR (the NotImplementedError was caught and stored).
@@ -166,7 +177,7 @@ async def test_run_native_path_raises_not_implemented():
 
 
 @pytest.mark.asyncio
-async def test_run_records_subagent_failure_and_circuit_breaks():
+async def test_run_records_subagent_failure_and_circuit_breaks(store, bus):
     """After 3 spawn/timeout failures in one cycle, the resolver is circuit-broken."""
     runner = StubCliRunner()
     runner.add_response_for_any(
@@ -184,7 +195,7 @@ async def test_run_records_subagent_failure_and_circuit_breaks():
         backend_policy="auto",
         max_cycles=1,
     )
-    orch, _bus, _store, _writer = await _make_orchestrator(spec, runner=runner)
+    orch, _bus, _store, _writer = await _make_orchestrator(store, bus, spec, runner=runner)
 
     await orch.run()
 
@@ -196,7 +207,7 @@ async def test_run_records_subagent_failure_and_circuit_breaks():
 
 
 @pytest.mark.asyncio
-async def test_run_stops_with_subagent_cap_reason():
+async def test_run_stops_with_subagent_cap_reason(store, bus):
     """If the budget's subagent cap is hit, the run stops with SUBAGENT_CAP."""
     runner = StubCliRunner()
     runner.add_response_for_any(make_wars_discover_result())
@@ -212,7 +223,7 @@ async def test_run_stops_with_subagent_cap_reason():
         max_cycles=1,
     )
     orch, _bus, _store, _writer = await _make_orchestrator(
-        spec, runner=runner, budget=budget
+        store, bus, spec, runner=runner, budget=budget
     )
 
     reason = await orch.run()
@@ -223,12 +234,12 @@ async def test_run_stops_with_subagent_cap_reason():
 
 
 @pytest.mark.asyncio
-async def test_run_quiesces_writer_between_cycles():
+async def test_run_quiesces_writer_between_cycles(store, bus):
     """After run() returns, the writer task should have fully drained."""
     runner = StubCliRunner()
     runner.add_response_for_any(make_wars_discover_result())
     spec = _sample_spec(policy="auto")
-    orch, _bus, _store, writer = await _make_orchestrator(spec, runner=runner)
+    orch, _bus, _store, writer = await _make_orchestrator(store, bus, spec, runner=runner)
 
     await orch.run()
 
@@ -238,15 +249,15 @@ async def test_run_quiesces_writer_between_cycles():
 
 
 @pytest.mark.asyncio
-async def test_run_syncs_budget_from_store_metrics_and_warns():
+async def test_run_syncs_budget_from_store_metrics_and_warns(store, bus):
     runner = StubCliRunner()
     runner.add_response_for_any(make_wars_discover_result())
     spec = _sample_spec(policy="auto")
     budget = Budget(usd_cap=1.0, wall_cap_s=600)
     orch, bus, store, _writer = await _make_orchestrator(
-        spec, runner=runner, budget=budget
+        store, bus, spec, runner=runner, budget=budget
     )
-    store.set_cost(0.6)
+    store.set_cost_tracker(_tracker_with_spend(0.6))
 
     reason = await orch.run()
 
@@ -259,15 +270,15 @@ async def test_run_syncs_budget_from_store_metrics_and_warns():
 
 
 @pytest.mark.asyncio
-async def test_run_stops_when_synced_budget_exceeds_cap():
+async def test_run_stops_when_synced_budget_exceeds_cap(store, bus):
     runner = StubCliRunner()
     runner.add_response_for_any(make_wars_discover_result())
     spec = _sample_spec(policy="auto")
     budget = Budget(usd_cap=1.0, wall_cap_s=600)
     orch, _bus, store, _writer = await _make_orchestrator(
-        spec, runner=runner, budget=budget
+        store, bus, spec, runner=runner, budget=budget
     )
-    store.set_cost(1.0)
+    store.set_cost_tracker(_tracker_with_spend(1.0))
 
     reason = await orch.run()
 
@@ -276,17 +287,18 @@ async def test_run_stops_when_synced_budget_exceeds_cap():
 
 
 @pytest.mark.asyncio
-async def test_run_persists_summary_and_run_complete_db_path():
+async def test_run_persists_summary_and_run_complete_db_path(store, bus):
     runner = StubCliRunner()
     runner.add_response_for_any(make_wars_discover_result())
     spec = _sample_spec(policy="auto")
-    orch, bus, store, _writer = await _make_orchestrator(spec, runner=runner)
+    orch, bus, store, _writer = await _make_orchestrator(store, bus, spec, runner=runner)
     orch._db_path = "/tmp/store.duckdb"  # type: ignore[attr-defined]
 
     await orch.run()
 
-    assert store.run_summaries
-    summary = store.run_summaries[-1][1]
+    rows = await store.query("SELECT summary_json FROM run_summary WHERE run_id = ?", ("run-x",))
+    assert rows
+    summary = json.loads(rows[-1]["summary_json"])
     assert summary["run_id"] == "run-x"
     assert summary["db_path"] == "/tmp/store.duckdb"
     completes = [e for e in bus.events if isinstance(e, RunComplete)]

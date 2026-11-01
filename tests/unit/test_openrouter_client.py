@@ -94,8 +94,20 @@ async def test_complete_returns_llm_response():
     assert resp.usage.tokens_in == 12
     assert resp.usage.tokens_out == 8
     assert resp.usage.cache_hit is False
-    assert resp.usage.cost_usd > 0
-    assert FakeCls.create_calls and len(FakeCls.create_calls) == 1
+    # FAST tier -> hermes-3-8b at $0.10/M in, $0.20/M out.
+    assert resp.usage.model == "openrouter/hermes-3-8b"
+    assert resp.usage.cost_usd == pytest.approx((12 * 0.10 + 8 * 0.20) / 1_000_000)
+    # The request the client built for the provider.
+    assert len(FakeCls.create_calls) == 1
+    call = FakeCls.create_calls[0]
+    assert call["model"] == "openrouter/hermes-3-8b"
+    assert call["temperature"] == 0.2  # complete() default
+    assert "max_tokens" not in call
+    assert [m["role"] for m in call["messages"]] == ["user"]
+    assert "ping" in json.dumps(call["messages"])
+    # The OpenAI SDK was pointed at OpenRouter with the caller's key.
+    assert FakeCls.instances[0].api_key == "sk-test"
+    assert FakeCls.instances[0].base_url == "https://openrouter.ai/api/v1"
 
 
 @pytest.mark.asyncio
@@ -115,7 +127,7 @@ async def test_complete_tracks_usage_on_cost_tracker():
     by_task = tracker.by_task("task-xyz")
     assert by_task.tokens_in == 30
     assert by_task.tokens_out == 10
-    assert tracker.total_usd() > 0
+    assert tracker.total_usd() == pytest.approx((30 * 0.10 + 10 * 0.20) / 1_000_000)
 
 
 @pytest.mark.asyncio

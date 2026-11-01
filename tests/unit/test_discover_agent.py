@@ -4,28 +4,28 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from researcher.agents.discover import DiscoverAgent
 from researcher.agents.native_deps import NativeAgentDeps
 from researcher.events import AgentStateChange
-from researcher.fetch.http import FetchResult
 from researcher.llm.prompts import default_registry
 from researcher.models import AgentState, FactClaim, Task, TaskKind
 from researcher.search.base import SearchResult
+from researcher.search.file_seeds import FileSeedsProvider
 from researcher.skills.registry import SkillRegistry
-from tests.stubs.bus import StubEventBus
 from tests.stubs.llm import StubLLMClient
-from tests.stubs.store import StubKnowledgeStore
+from tests.support import mock_http
+
+SEED_QUERY = "major wars since 1500"
 
 
 def _sample_task() -> Task:
     return Task(
         kind=TaskKind.DISCOVER,
         spec_ref="wars",
-        seed_query="major wars since 1500",
+        seed_query=SEED_QUERY,
         budget_usd=0.01,
         deadline_ts=datetime.now(UTC) + timedelta(minutes=5),
     )
@@ -41,32 +41,24 @@ def _entity_schema() -> dict:
     }
 
 
+_DEFAULT_PAGE = "<html><body><p>World War II was fought 1939-1945.</p></body></html>"
+
+
 def _make_deps(
     search_results: list[SearchResult],
-    fetch_results: list[FetchResult] | None = None,
+    pages: dict[str, tuple[int, str]] | None = None,
     skill_registry: SkillRegistry | None = None,
 ) -> NativeAgentDeps:
-    search = MagicMock()
-    search.name = "mock"
-    search.search = AsyncMock(return_value=search_results)
-
-    http = MagicMock()
-    if fetch_results is None:
-        fetch_results = [
-            FetchResult(
-                url=r.url,
-                status=200,
-                content="<html><body><p>World War II was fought 1939-1945.</p></body></html>",
-                headers={},
-                ok=True,
-            )
-            for r in search_results
-        ]
-    http.fetch = AsyncMock(side_effect=fetch_results)
-
+    # Results are only returned for the task's exact seed query, so the
+    # tests also pin down the query DiscoverAgent builds.
+    search = FileSeedsProvider(
+        seeds={SEED_QUERY: [r.model_dump() for r in search_results]}
+    )
+    if pages is None:
+        pages = {r.url: (200, _DEFAULT_PAGE) for r in search_results}
     return NativeAgentDeps(
         search=search,
-        http=http,
+        http=mock_http(pages),
         prompts=default_registry(),
         max_fetch_per_task=3,
         skill_registry=skill_registry,
@@ -84,15 +76,13 @@ def _make_llm_returning(entities: list[str]) -> Any:
 
 
 @pytest.mark.asyncio
-async def test_discover_happy_path_emits_claims() -> None:
+async def test_discover_happy_path_emits_claims(store, bus) -> None:
     search_results = [
         SearchResult(title="WW2", url="https://en.wikipedia.org/wiki/World_War_II", snippet="", rank=0),
         SearchResult(title="WW1", url="https://en.wikipedia.org/wiki/World_War_I", snippet="", rank=1),
     ]
     deps = _make_deps(search_results)
     llm = _make_llm_returning(["World War II", "World War I"])
-    bus = StubEventBus()
-    store = StubKnowledgeStore()
 
     agent = DiscoverAgent(
         agent_id="native-abc",
@@ -115,15 +105,17 @@ async def test_discover_happy_path_emits_claims() -> None:
         assert isinstance(claim, FactClaim)
         assert claim.entity_type == "War"
         assert claim.field == "name"
-        assert claim.provenance.url.startswith("https://")
+        # Provenance points at the first source that was actually fetched.
+        assert claim.provenance.url == "https://en.wikipedia.org/wiki/World_War_II"
+        assert "1939-1945" in claim.provenance.snippet
 
 
 @pytest.mark.asyncio
-async def test_discover_empty_search_returns_no_claims() -> None:
+async def test_discover_empty_search_returns_no_claims(store, bus) -> None:
     deps = _make_deps(search_results=[])
-    llm = _make_llm_returning([])
-    bus = StubEventBus()
-    store = StubKnowledgeStore()
+    # Even if the LLM would hallucinate an entity, no sources means the agent
+    # must short-circuit before extraction.
+    llm = _make_llm_returning(["Phantom War"])
 
     agent = DiscoverAgent(
         agent_id="native-abc",
@@ -143,25 +135,17 @@ async def test_discover_empty_search_returns_no_claims() -> None:
 
 
 @pytest.mark.asyncio
-async def test_discover_skips_failed_fetches() -> None:
+async def test_discover_skips_failed_fetches(store, bus) -> None:
     search_results = [
         SearchResult(title="WW2", url="https://example.com/a", snippet="", rank=0),
         SearchResult(title="WW1", url="https://example.com/b", snippet="", rank=1),
     ]
-    fetch_results = [
-        FetchResult(url="https://example.com/a", status=500, content="", headers={}, ok=False, error="http 500"),
-        FetchResult(
-            url="https://example.com/b",
-            status=200,
-            content="<html><body><p>World War I 1914-1918.</p></body></html>",
-            headers={},
-            ok=True,
-        ),
-    ]
-    deps = _make_deps(search_results, fetch_results=fetch_results)
+    pages = {
+        "https://example.com/a": (500, ""),
+        "https://example.com/b": (200, "<html><body><p>World War I 1914-1918.</p></body></html>"),
+    }
+    deps = _make_deps(search_results, pages=pages)
     llm = _make_llm_returning(["World War I"])
-    bus = StubEventBus()
-    store = StubKnowledgeStore()
 
     agent = DiscoverAgent(
         agent_id="native-abc",
@@ -184,14 +168,12 @@ async def test_discover_skips_failed_fetches() -> None:
 
 
 @pytest.mark.asyncio
-async def test_discover_emits_state_transitions() -> None:
+async def test_discover_emits_state_transitions(store, bus) -> None:
     search_results = [
         SearchResult(title="WW2", url="https://example.com/a", snippet="", rank=0),
     ]
     deps = _make_deps(search_results)
     llm = _make_llm_returning(["World War II"])
-    bus = StubEventBus()
-    store = StubKnowledgeStore()
 
     agent = DiscoverAgent(
         agent_id="native-abc",
@@ -215,7 +197,7 @@ async def test_discover_emits_state_transitions() -> None:
 
 
 @pytest.mark.asyncio
-async def test_discover_prompt_includes_matching_skill_guidance() -> None:
+async def test_discover_prompt_includes_matching_skill_guidance(store, bus) -> None:
     search_results = [
         SearchResult(title="WW2", url="https://example.com/a", snippet="", rank=0),
     ]
@@ -223,8 +205,6 @@ async def test_discover_prompt_includes_matching_skill_guidance() -> None:
     registry.load_dir("skills")
     deps = _make_deps(search_results, skill_registry=registry)
     llm = StubLLMClient()
-    bus = StubEventBus()
-    store = StubKnowledgeStore()
 
     agent = DiscoverAgent(
         agent_id="native-abc",

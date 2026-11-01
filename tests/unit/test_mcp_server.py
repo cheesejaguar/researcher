@@ -14,8 +14,8 @@ from typing import Any
 import pytest
 
 from researcher.mcp.server import McpTool, ResearcherMcpServer
+from researcher.storage.duckdb_store import DuckDBKnowledgeStore
 from researcher.storage.store import FieldCell
-from tests.stubs.store import StubKnowledgeStore
 
 # ---------------------------------------------------------------- helpers
 
@@ -30,7 +30,7 @@ def _cell(value: Any, confidence: float = 0.9) -> FieldCell:
 
 
 async def _populate(
-    store: StubKnowledgeStore,
+    store: DuckDBKnowledgeStore,
     entity_type: str,
     names: list[str],
 ) -> list[str]:
@@ -49,8 +49,7 @@ async def _populate(
 
 
 @pytest.mark.asyncio
-async def test_list_tools_exposes_five_tools() -> None:
-    store = StubKnowledgeStore()
+async def test_list_tools_exposes_five_tools(store) -> None:
     server = ResearcherMcpServer(store=store)
 
     tools = server.list_tools()
@@ -76,8 +75,7 @@ async def test_list_tools_exposes_five_tools() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tools_list_jsonrpc() -> None:
-    store = StubKnowledgeStore()
+async def test_tools_list_jsonrpc(store) -> None:
     server = ResearcherMcpServer(store=store)
 
     response = await server.handle_jsonrpc(
@@ -96,8 +94,7 @@ async def test_tools_list_jsonrpc() -> None:
 
 
 @pytest.mark.asyncio
-async def test_query_entities_empty_store() -> None:
-    store = StubKnowledgeStore()
+async def test_query_entities_empty_store(store) -> None:
     server = ResearcherMcpServer(store=store)
 
     result = await server.call_tool("query_entities", {})
@@ -106,8 +103,7 @@ async def test_query_entities_empty_store() -> None:
 
 
 @pytest.mark.asyncio
-async def test_query_entities_returns_populated() -> None:
-    store = StubKnowledgeStore()
+async def test_query_entities_returns_populated(store) -> None:
     await _populate(store, "War", ["WWI", "WWII", "Korea"])
     await _populate(store, "Person", ["Ada", "Grace"])
     server = ResearcherMcpServer(store=store)
@@ -122,8 +118,7 @@ async def test_query_entities_returns_populated() -> None:
 
 
 @pytest.mark.asyncio
-async def test_query_entities_respects_limit() -> None:
-    store = StubKnowledgeStore()
+async def test_query_entities_respects_limit(store) -> None:
     await _populate(store, "War", [f"war-{i}" for i in range(10)])
     server = ResearcherMcpServer(store=store)
 
@@ -136,8 +131,7 @@ async def test_query_entities_respects_limit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_entity_existing() -> None:
-    store = StubKnowledgeStore()
+async def test_get_entity_existing(store) -> None:
     ids = await _populate(store, "War", ["WWI"])
     server = ResearcherMcpServer(store=store)
 
@@ -150,8 +144,7 @@ async def test_get_entity_existing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_entity_missing() -> None:
-    store = StubKnowledgeStore()
+async def test_get_entity_missing(store) -> None:
     server = ResearcherMcpServer(store=store)
 
     result = await server.call_tool("get_entity", {"entity_id": "does-not-exist"})
@@ -163,8 +156,7 @@ async def test_get_entity_missing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_runs_empty() -> None:
-    store = StubKnowledgeStore()
+async def test_list_runs_empty(store) -> None:
     server = ResearcherMcpServer(store=store)
 
     result = await server.call_tool("list_runs", {})
@@ -173,8 +165,7 @@ async def test_list_runs_empty() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_run_status_missing() -> None:
-    store = StubKnowledgeStore()
+async def test_get_run_status_missing(store) -> None:
     server = ResearcherMcpServer(store=store)
 
     result = await server.call_tool("get_run_status", {"run_id": "nope"})
@@ -186,8 +177,7 @@ async def test_get_run_status_missing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_run_disabled_without_launcher() -> None:
-    store = StubKnowledgeStore()
+async def test_start_run_disabled_without_launcher(store) -> None:
     server = ResearcherMcpServer(store=store)
 
     result = await server.call_tool("start_run", {"spec_path": "specs/wars.yaml"})
@@ -196,8 +186,7 @@ async def test_start_run_disabled_without_launcher() -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_run_calls_launcher() -> None:
-    store = StubKnowledgeStore()
+async def test_start_run_calls_launcher(store) -> None:
     calls: list[tuple[str, str | None]] = []
 
     async def launcher(spec_path: str, run_id: str | None) -> str:
@@ -213,8 +202,7 @@ async def test_start_run_calls_launcher() -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_run_launcher_exception() -> None:
-    store = StubKnowledgeStore()
+async def test_start_run_launcher_exception(store) -> None:
 
     async def launcher(spec_path: str, run_id: str | None) -> str:
         raise RuntimeError("boom")
@@ -231,8 +219,7 @@ async def test_start_run_launcher_exception() -> None:
 
 
 @pytest.mark.asyncio
-async def test_jsonrpc_tools_call_success() -> None:
-    store = StubKnowledgeStore()
+async def test_jsonrpc_tools_call_success(store) -> None:
     server = ResearcherMcpServer(store=store)
 
     response = await server.handle_jsonrpc(
@@ -252,8 +239,7 @@ async def test_jsonrpc_tools_call_success() -> None:
 
 
 @pytest.mark.asyncio
-async def test_jsonrpc_unknown_method() -> None:
-    store = StubKnowledgeStore()
+async def test_jsonrpc_unknown_method(store) -> None:
     server = ResearcherMcpServer(store=store)
 
     response = await server.handle_jsonrpc(
@@ -267,8 +253,7 @@ async def test_jsonrpc_unknown_method() -> None:
 
 
 @pytest.mark.asyncio
-async def test_jsonrpc_tool_exception_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
-    store = StubKnowledgeStore()
+async def test_jsonrpc_tool_exception_wrapped(monkeypatch: pytest.MonkeyPatch, store) -> None:
     server = ResearcherMcpServer(store=store)
 
     async def exploding_handler(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -297,8 +282,7 @@ async def test_jsonrpc_tool_exception_wrapped(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.asyncio
-async def test_jsonrpc_notification_returns_none() -> None:
-    store = StubKnowledgeStore()
+async def test_jsonrpc_notification_returns_none(store) -> None:
     server = ResearcherMcpServer(store=store)
 
     response = await server.handle_jsonrpc({"jsonrpc": "2.0", "method": "tools/list", "params": {}})

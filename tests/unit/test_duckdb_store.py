@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
 
+from researcher.llm.client import LLMUsage
+from researcher.llm.cost_tracker import SimpleCostTracker
 from researcher.storage.duckdb_store import DuckDBKnowledgeStore
 from researcher.storage.store import Conflict, FieldCell
 
@@ -44,6 +47,17 @@ async def test_init_schema_accepts_pydantic_class(tmp_path: Path):
     await store.open()
     try:
         await store.init_schema(WarEntity)
+        rows = await store.query(
+            "SELECT entity_class_name, migration_type, schema_json FROM schema_migrations"
+        )
+        assert len(rows) == 1
+        assert rows[0]["entity_class_name"] == "WarEntity"
+        assert rows[0]["migration_type"] == "initial"
+        assert set(json.loads(rows[0]["schema_json"])["properties"]) == {
+            "name",
+            "start_year",
+            "end_year",
+        }
     finally:
         await store.close()
 
@@ -106,16 +120,6 @@ async def test_snapshot_metrics_reports_counts(tmp_path: Path):
         await store.close()
 
 
-class _FakeCostTracker:
-    def __init__(self, total: float) -> None:
-        self._total = total
-        self.calls = 0
-
-    def total_usd(self) -> float:
-        self.calls += 1
-        return self._total
-
-
 class _BrokenCostTracker:
     def total_usd(self) -> float:
         raise RuntimeError("tracker exploded")
@@ -125,7 +129,9 @@ class _BrokenCostTracker:
 async def test_snapshot_metrics_reads_cost_from_injected_tracker(tmp_path: Path):
     """snapshot_metrics reports the real USD total when a tracker is wired."""
     store = DuckDBKnowledgeStore(db_path=tmp_path / "s.duckdb")
-    tracker = _FakeCostTracker(total=1.2345)
+    tracker = SimpleCostTracker()
+    tracker.add("t1", LLMUsage(tokens_in=10, tokens_out=5, cost_usd=1.0, model="m"))
+    tracker.add("t2", LLMUsage(tokens_in=10, tokens_out=5, cost_usd=0.2345, model="m"))
     store.set_cost_tracker(tracker)
 
     await store.open()
@@ -133,7 +139,6 @@ async def test_snapshot_metrics_reads_cost_from_injected_tracker(tmp_path: Path)
         await store.init_schema(WarEntity)
         m = await store.snapshot_metrics()
         assert m.cost_usd_total == pytest.approx(1.2345)
-        assert tracker.calls == 1
     finally:
         await store.close()
 
@@ -206,8 +211,14 @@ async def test_record_and_get_provenance(tmp_path: Path):
                 "snippet": "hello",
             },
         )
-        # No direct get_provenance in the ABC; verify via query if implemented,
-        # or just confirm it didn't raise.
+        # Re-recording the same id replaces the row rather than duplicating it.
+        await store.record_provenance("prov-1", {"url": "https://example.org"})
+        rows = await store.query(
+            "SELECT provenance_id, data_json FROM provenance"
+        )
+        assert len(rows) == 1
+        assert rows[0]["provenance_id"] == "prov-1"
+        assert json.loads(rows[0]["data_json"]) == {"url": "https://example.org"}
     finally:
         await store.close()
 

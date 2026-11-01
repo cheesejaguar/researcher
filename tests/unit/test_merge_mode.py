@@ -10,6 +10,7 @@ from researcher.models import FactClaim, Provenance
 from researcher.spec import EntitySpec, FieldSpec, RunSpec
 from researcher.storage.duckdb_store import DuckDBKnowledgeStore
 from researcher.storage.store import FieldCell
+from tests.support import make_resolver
 
 
 def _prov(url: str = "https://example.com", span: str = "s0") -> Provenance:
@@ -177,23 +178,7 @@ async def test_merge_field_lower_confidence_loses_but_creates_conflict(tmp_path)
 @pytest.mark.asyncio
 async def test_writer_in_merge_mode_accumulates_across_runs(tmp_path):
     """Two sequential runs over the same entity name should accumulate fields."""
-    from researcher.storage.resolver import (
-        EntityResolver,
-        ResolveDecision,
-        ResolveResult,
-    )
     from researcher.storage.writer import FactWriter
-
-    class _StubResolver(EntityResolver):
-        async def resolve(self, entity_type, name, context=None):
-            return ResolveResult(
-                decision=ResolveDecision.AUTO_MERGE,
-                entity_id="stub",
-                similarity=1.0,
-                candidate_ids=[],
-            )
-        async def add_distinct_pair(self, a, b): return None
-        async def is_blocked(self, a, b): return False
 
     schema = {
         "entity_type": "War",
@@ -231,7 +216,7 @@ async def test_writer_in_merge_mode_accumulates_across_runs(tmp_path):
         # Run 1: add start_year.
         writer1 = FactWriter(
             store=store,
-            resolver=_StubResolver(),
+            resolver=make_resolver(store),
             entity_schema=schema,
             emit_fact=_emit_fact,
             emit_conflict=_emit_conflict,
@@ -248,7 +233,7 @@ async def test_writer_in_merge_mode_accumulates_across_runs(tmp_path):
         # Run 2: add end_year (different field on same entity).
         writer2 = FactWriter(
             store=store,
-            resolver=_StubResolver(),
+            resolver=make_resolver(store),
             entity_schema=schema,
             emit_fact=_emit_fact,
             emit_conflict=_emit_conflict,

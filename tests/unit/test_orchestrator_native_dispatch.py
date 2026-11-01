@@ -2,24 +2,20 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 
 from researcher.agents.native_deps import NativeAgentDeps
 from researcher.backends.resolver import BackendResolver
 from researcher.budget import Budget
-from researcher.fetch.http import FetchResult
 from researcher.llm.prompts import default_registry
 from researcher.orchestrator import Orchestrator, StopReason
 from researcher.scheduler import Scheduler
-from researcher.search.base import SearchResult
+from researcher.search.file_seeds import FileSeedsProvider
 from researcher.spec import EntitySpec, FieldSpec, RunSpec
+from researcher.storage.duckdb_store import DuckDBKnowledgeStore
 from researcher.storage.writer import FactWriter
-from tests.stubs.bus import StubEventBus
 from tests.stubs.llm import StubLLMClient
-from tests.stubs.resolver import StubEntityResolver
-from tests.stubs.store import StubKnowledgeStore
+from tests.support import RecordingEventBus, make_resolver, mock_http
 
 
 def _which_none(_: str) -> str | None:
@@ -52,28 +48,14 @@ async def _noop_conflict(_entity_id, _cells):
     return None
 
 
+WW2_URL = "https://example.com/ww2"
+
+
 def _make_native_deps_with_canned_discover() -> NativeAgentDeps:
-    search = MagicMock()
-    search.name = "mock"
-    search.search = AsyncMock(
-        return_value=[
-            SearchResult(
-                title="WW2",
-                url="https://example.com/ww2",
-                snippet="",
-                rank=0,
-            )
-        ]
-    )
-    http = MagicMock()
-    http.fetch = AsyncMock(
-        return_value=FetchResult(
-            url="https://example.com/ww2",
-            status=200,
-            content="<html><body><p>World War II was fought 1939-1945.</p></body></html>",
-            headers={},
-            ok=True,
-        )
+    # Search results exist only for the spec's seed query.
+    search = FileSeedsProvider(seeds={"major wars": [{"title": "WW2", "url": WW2_URL}]})
+    http = mock_http(
+        {WW2_URL: (200, "<html><body><p>World War II was fought 1939-1945.</p></body></html>")}
     )
     return NativeAgentDeps(
         search=search, http=http, prompts=default_registry(), max_fetch_per_task=2
@@ -81,11 +63,11 @@ def _make_native_deps_with_canned_discover() -> NativeAgentDeps:
 
 
 async def _build_orchestrator(
+    store: DuckDBKnowledgeStore,
+    bus: RecordingEventBus,
     native_deps: NativeAgentDeps | None,
     patched_llm_entities: list[str] | None = None,
-) -> tuple[Orchestrator, StubEventBus, StubKnowledgeStore, FactWriter]:
-    store = StubKnowledgeStore()
-    await store.open()
+) -> tuple[Orchestrator, RecordingEventBus, DuckDBKnowledgeStore, FactWriter]:
     llm = StubLLMClient()
     if patched_llm_entities is not None:
         async def fake_structured(messages, schema, tier, task_id, temperature=0.0, schema_retry=True):
@@ -95,8 +77,7 @@ async def _build_orchestrator(
             return schema()
 
         llm.complete_structured = fake_structured  # type: ignore[method-assign]
-    bus = StubEventBus()
-    resolver = StubEntityResolver()
+    resolver = make_resolver(store)
     entity_schema = {
         "entity_type": "War",
         "fields": [{"name": "name", "type": "str", "required": True}],
@@ -130,24 +111,27 @@ async def _build_orchestrator(
 
 
 @pytest.mark.asyncio
-async def test_native_dispatch_runs_discover_agent_and_submits_claims() -> None:
+async def test_native_dispatch_runs_discover_agent_and_submits_claims(store, bus) -> None:
     deps = _make_native_deps_with_canned_discover()
     orch, _bus, _store, writer = await _build_orchestrator(
-        native_deps=deps, patched_llm_entities=["World War II"]
+        store, bus, native_deps=deps, patched_llm_entities=["World War II"]
     )
 
     reason = await orch.run()
 
-    # The run should have completed without error, and the writer should have
-    # received at least one claim from the native DiscoverAgent.
-    assert reason in (StopReason.NO_TASKS, StopReason.PLATEAU, StopReason.BUDGET, StopReason.DEADLINE)
-    assert writer.metrics["submitted"] >= 1
+    # The run completed without error and the native DiscoverAgent's claim
+    # went through the writer into the store.
+    assert reason == StopReason.PLATEAU
+    assert writer.metrics["submitted"] == 1
+    assert writer.metrics["written"] == 1
+    rows = await store.query("SELECT name FROM entities WHERE entity_type = 'War'")
+    assert [r["name"] for r in rows] == ["World War II"]
 
 
 @pytest.mark.asyncio
-async def test_native_dispatch_without_deps_falls_back_to_not_implemented() -> None:
+async def test_native_dispatch_without_deps_falls_back_to_not_implemented(store, bus) -> None:
     """Backwards-compat: without set_native_deps(), the native path raises."""
-    orch, _bus, _store, _writer = await _build_orchestrator(native_deps=None)
+    orch, _bus, _store, _writer = await _build_orchestrator(store, bus, native_deps=None)
 
     reason = await orch.run()
 
@@ -156,7 +140,7 @@ async def test_native_dispatch_without_deps_falls_back_to_not_implemented() -> N
 
 
 @pytest.mark.asyncio
-async def test_native_dispatch_propagates_enum_into_entity_schema() -> None:
+async def test_native_dispatch_propagates_enum_into_entity_schema(store, bus) -> None:
     """Regression guard: orchestrator._spawn_native_agent must carry the
     FieldSpec.enum metadata into the entity_schema dict it passes to the
     native agent. If this lookup drops `enum`, ExpandAgent's response
@@ -200,11 +184,8 @@ async def test_native_dispatch_propagates_enum_into_entity_schema() -> None:
 
     expand_mod.ExpandAgent.__init__ = spy_init  # type: ignore[method-assign]
     try:
-        store = StubKnowledgeStore()
-        await store.open()
         llm = StubLLMClient()
-        bus = StubEventBus()
-        resolver = StubEntityResolver()
+        resolver = make_resolver(store)
         entity_schema_stub = {
             "entity_type": "War",
             "fields": [{"name": "name", "type": "str", "required": True}],

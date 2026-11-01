@@ -198,6 +198,9 @@ async def test_stop_is_idempotent(tmp_path: Path):
     await writer.start()
     await writer.stop()
     await writer.stop()  # should not raise
+    # Once stopped, the writer refuses new claims.
+    with pytest.raises(RuntimeError, match="stopped"):
+        await writer.on_fact(_sample_claim(), run_id="run-1")
 
 
 @pytest.mark.asyncio
